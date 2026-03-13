@@ -81,6 +81,39 @@ export default function Home({ session }) {
     fetchActivityTracker()
   }, [fetchEntries, fetchActivityTracker])
 
+  // Request notification permission once on load
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission()
+    }
+  }, [])
+
+  // Poll every 5 minutes — fire popup if 2 hours have passed since last
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const { data } = await supabase
+        .from('activity_tracker')
+        .select('last_popup_shown')
+        .eq('user_id', userId)
+        .single()
+      if (!data?.last_popup_shown) return
+      const hoursPassed = (Date.now() - new Date(data.last_popup_shown).getTime()) / 3600000
+      if (hoursPassed >= HOURS_BETWEEN_POPUPS) {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification('✦ a moment to reflect', {
+            body: 'time for a quick reflection',
+            icon: '/favicon.ico',
+          })
+        }
+        triggerPopup()
+        setHoursLeft(null)
+      } else {
+        setHoursLeft(Math.ceil(HOURS_BETWEEN_POPUPS - hoursPassed))
+      }
+    }, 5 * 60 * 1000) // every 5 minutes
+    return () => clearInterval(interval)
+  }, [userId])
+
   function triggerPopup() {
     setQuestion(QUESTIONS[Math.floor(Math.random() * QUESTIONS.length)])
     setAnswer('')
