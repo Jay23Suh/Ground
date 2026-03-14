@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from './supabase'
-import Wrapped from './Wrapped'
+import Abstract from './Wrapped'
 
 const QUESTIONS = [
   "What's something you're grateful for right now?",
@@ -37,7 +37,7 @@ export default function Home({ session }) {
   const [stats, setStats] = useState({ total: 0, streak: 0, thisWeek: 0 })
   const [lastPopup, setLastPopup] = useState(null)
   const [hoursLeft, setHoursLeft] = useState(null)
-  const [showWrapped, setShowWrapped] = useState(false)
+  const [showAbstract, setShowAbstract] = useState(false)
 
   const userId = session.user.id
 
@@ -167,7 +167,7 @@ export default function Home({ session }) {
 
   return (
     <div className="app">
-      {showWrapped && <Wrapped session={session} onClose={() => setShowWrapped(false)} />}
+      {showAbstract && <Abstract session={session} onClose={() => setShowAbstract(false)} />}
       {/* Popup */}
       {showPopup && (
         <div className="popup-overlay">
@@ -198,7 +198,7 @@ export default function Home({ session }) {
           <button className={view === 'home' ? 'nav-link active' : 'nav-link'} onClick={() => setView('home')}>home</button>
           <button className={view === 'history' ? 'nav-link active' : 'nav-link'} onClick={() => setView('history')}>entries</button>
           <button className={view === 'stats' ? 'nav-link active' : 'nav-link'} onClick={() => setView('stats')}>stats</button>
-          <button className="nav-link wrapped-btn" onClick={() => setShowWrapped(true)}>✦ wrapped</button>
+          <button className="nav-link abstract-btn" onClick={() => setShowAbstract(true)}>✦ abstract</button>
           <button className="nav-link signout" onClick={handleSignOut}>sign out</button>
         </div>
       </nav>
@@ -207,7 +207,7 @@ export default function Home({ session }) {
       {view === 'home' && (
         <div className="page">
           <div className="home-hero">
-            <h1 className="home-title">hello, {session.user.email.split('@')[0]}</h1>
+            <h1 className="home-title">hello, {session.user.user_metadata?.name}</h1>
             <p className="home-sub">
               {hoursLeft
                 ? `next prompt in ~${hoursLeft} hour${hoursLeft !== 1 ? 's' : ''}`

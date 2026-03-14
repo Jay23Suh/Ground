@@ -123,7 +123,7 @@ function TitleSlide({ visible }) {
         your week in journaling
       </p>
       <h1 style={{ color: '#f0c060', fontSize: 80, fontFamily: 'Georgia, serif', fontWeight: 'bold', lineHeight: 1.1 }}>
-        Wrapped ✦
+        Abstract ✦
       </h1>
       <p style={{ color: '#ffffff44', fontSize: 13, marginTop: 48, letterSpacing: 3, fontFamily: 'Helvetica, sans-serif' }}>
         tap or press → to begin
