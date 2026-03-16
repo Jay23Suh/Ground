@@ -73,6 +73,100 @@ function pickQuestion() {
   return { question, category }
 }
 
+function buildBuckets(entries, period) {
+  const now = new Date()
+  const buckets = []
+
+  if (period === 'day') {
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(now); d.setDate(d.getDate() - i); d.setHours(0,0,0,0)
+      const key = d.toISOString().split('T')[0]
+      buckets.push({ label: i % 5 === 0 ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '', key })
+    }
+  } else if (period === 'week') {
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now); d.setDate(d.getDate() - i * 7)
+      const start = new Date(d); start.setDate(d.getDate() - d.getDay()); start.setHours(0,0,0,0)
+      const end   = new Date(start); end.setDate(start.getDate() + 7)
+      buckets.push({ label: start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), start, end })
+    }
+  } else if (period === 'month') {
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      const end = new Date(d.getFullYear(), d.getMonth() + 1, 1)
+      buckets.push({ label: d.toLocaleDateString('en-US', { month: 'short' }), start: d, end })
+    }
+  } else if (period === 'year') {
+    const years = [...new Set(entries.map(e => new Date(e.created_at).getFullYear()))].sort()
+    if (years.length === 0) years.push(now.getFullYear())
+    years.forEach(y => {
+      buckets.push({ label: String(y), start: new Date(y, 0, 1), end: new Date(y + 1, 0, 1) })
+    })
+  }
+
+  return buckets.map(b => ({
+    ...b,
+    count: entries.filter(e => {
+      const d = new Date(e.created_at)
+      if (period === 'day') return e.created_at.split('T')[0] === b.key
+      return d >= b.start && d < b.end
+    }).length,
+  }))
+}
+
+function EntryChart({ entries }) {
+  const [period, setPeriod] = useState('week')
+  const buckets = buildBuckets(entries, period)
+  const maxCount = Math.max(...buckets.map(b => b.count), 1)
+
+  const W = 600, H = 160, padL = 28, padB = 28, padR = 12, padT = 12
+  const chartW = W - padL - padR
+  const chartH = H - padT - padB
+  const barW = Math.max(4, (chartW / buckets.length) * 0.6)
+  const gap   = chartW / buckets.length
+
+  const yTicks = [0, Math.ceil(maxCount / 2), maxCount]
+
+  return (
+    <div className="chart-card">
+      <div className="chart-header">
+        <span className="chart-title">entries over time</span>
+        <div className="chart-toggles">
+          {['day','week','month','year'].map(p => (
+            <button key={p} className={`chart-pill${period === p ? ' active' : ''}`} onClick={() => setPeriod(p)}>{p}</button>
+          ))}
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
+        {yTicks.map(t => {
+          const y = padT + chartH - (t / maxCount) * chartH
+          return (
+            <g key={t}>
+              <line x1={padL} x2={W - padR} y1={y} y2={y} stroke="rgba(0,84,153,0.08)" strokeWidth="1" />
+              <text x={padL - 6} y={y + 4} textAnchor="end" fontSize="9" fill="rgba(0,84,153,0.4)" fontFamily="Space Mono, monospace">{t}</text>
+            </g>
+          )
+        })}
+        {buckets.map((b, i) => {
+          const barH = (b.count / maxCount) * chartH
+          const x = padL + i * gap + gap / 2 - barW / 2
+          const y = padT + chartH - barH
+          return (
+            <g key={i}>
+              <rect x={x} y={y} width={barW} height={Math.max(barH, b.count > 0 ? 2 : 0)}
+                rx="3" fill={b.count > 0 ? 'var(--lavender)' : 'rgba(195,155,211,0.15)'} opacity="0.85" />
+              {b.label && (
+                <text x={padL + i * gap + gap / 2} y={H - 4} textAnchor="middle"
+                  fontSize="9" fill="rgba(0,84,153,0.4)" fontFamily="Space Mono, monospace">{b.label}</text>
+              )}
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
 const CATEGORY_LABELS = {
   gratitude:  'Gratitude',
   compassion: 'Self-Compassion',
@@ -373,6 +467,8 @@ export default function Home({ session }) {
               <div className="stats-label">avg words / entry</div>
             </div>
           </div>
+
+          <EntryChart entries={entries} />
 
           {lastPopup && (
             <div className="last-popup-info">

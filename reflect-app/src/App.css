@@ -86,6 +86,14 @@ body {
 .entry-date { font-size: 11px; color: var(--text-muted); font-family: 'Space Mono', monospace; }
 .empty { color: var(--text-muted); font-style: italic; font-size: 15px; }
 
+.chart-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: var(--radius); padding: 20px 20px 12px; margin-bottom: 24px; }
+.chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.chart-title { font-family: 'Cormorant Garamond', serif; font-size: 16px; font-style: italic; color: var(--lavender); }
+.chart-toggles { display: flex; gap: 6px; }
+.chart-pill { background: transparent; border: 1px solid var(--card-border); color: var(--text-muted); font-family: 'Space Mono', monospace; font-size: 10px; padding: 4px 10px; border-radius: 20px; cursor: pointer; transition: all 0.2s; text-transform: lowercase; }
+.chart-pill:hover { border-color: var(--lavender); color: var(--lavender); }
+.chart-pill.active { background: var(--lavender); border-color: var(--lavender); color: #fff; }
+
 .category-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
 .category-pill { background: transparent; border: 1px solid var(--card-border); color: var(--text-muted); font-family: 'Quicksand', sans-serif; font-size: 13px; padding: 6px 16px; border-radius: 20px; cursor: pointer; transition: all 0.2s; }
 .category-pill:hover { border-color: var(--lavender); color: var(--lavender); }
