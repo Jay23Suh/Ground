@@ -78,10 +78,9 @@ function buildBuckets(entries, period) {
   const buckets = []
 
   if (period === 'day') {
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(now); d.setDate(d.getDate() - i); d.setHours(0,0,0,0)
-      const key = d.toISOString().split('T')[0]
-      buckets.push({ label: i % 5 === 0 ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '', key })
+    for (let h = 0; h < 24; h++) {
+      const label = h === 0 ? '12am' : h === 12 ? '12pm' : h % 6 === 0 ? (h < 12 ? `${h}am` : `${h-12}pm`) : ''
+      buckets.push({ label, hour: h })
     }
   } else if (period === 'week') {
     for (let i = 11; i >= 0; i--) {
@@ -104,11 +103,12 @@ function buildBuckets(entries, period) {
     })
   }
 
+  const todayStr = now.toISOString().split('T')[0]
   return buckets.map(b => ({
     ...b,
     count: entries.filter(e => {
       const d = new Date(e.created_at)
-      if (period === 'day') return e.created_at.split('T')[0] === b.key
+      if (period === 'day') return e.created_at.split('T')[0] === todayStr && d.getHours() === b.hour
       return d >= b.start && d < b.end
     }).length,
   }))
@@ -125,7 +125,10 @@ function EntryChart({ entries }) {
   const barW = Math.max(4, (chartW / buckets.length) * 0.6)
   const gap   = chartW / buckets.length
 
-  const yTicks = [0, Math.ceil(maxCount / 2), maxCount]
+  const rawTicks = maxCount <= 4
+    ? Array.from({ length: maxCount + 1 }, (_, i) => i)
+    : [0, Math.round(maxCount / 4), Math.round(maxCount / 2), Math.round(3 * maxCount / 4), maxCount]
+  const yTicks = [...new Set(rawTicks)]
 
   return (
     <div className="chart-card">
