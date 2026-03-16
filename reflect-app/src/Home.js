@@ -73,6 +73,56 @@ function pickQuestion() {
   return { question, category }
 }
 
+const CATEGORY_LABELS = {
+  gratitude:  'Gratitude',
+  compassion: 'Self-Compassion',
+  values:     'Values & Meaning',
+  emotions:   'Emotions',
+  grounding:  'Present Moment',
+}
+
+function HistoryView({ entries }) {
+  const [activeCategory, setActiveCategory] = useState('all')
+
+  const categories = ['all', ...Object.keys(CATEGORY_LABELS).filter(c =>
+    entries.some(e => e.category === c)
+  )]
+
+  const filtered = activeCategory === 'all'
+    ? entries
+    : entries.filter(e => e.category === activeCategory)
+
+  return entries.length === 0
+    ? <p className="empty">no entries yet — write your first one!</p>
+    : <>
+        <div className="category-filters">
+          {categories.map(c => (
+            <button
+              key={c}
+              className={`category-pill${activeCategory === c ? ' active' : ''}`}
+              onClick={() => setActiveCategory(c)}
+            >
+              {c === 'all' ? 'All' : CATEGORY_LABELS[c]}
+            </button>
+          ))}
+        </div>
+        <div className="entries-list">
+          {filtered.map(e => (
+            <div className="entry-card" key={e.id}>
+              {e.category && (
+                <div className={`entry-category entry-category--${e.category}`}>
+                  {CATEGORY_LABELS[e.category] || e.category}
+                </div>
+              )}
+              <div className="entry-q">{e.question}</div>
+              <div className="entry-a">{e.answer}</div>
+              <div className="entry-date">{new Date(e.created_at).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>
+            </div>
+          ))}
+        </div>
+      </>
+}
+
 const HOURS_BETWEEN_POPUPS = 2
 
 export default function Home({ session }) {
@@ -297,18 +347,7 @@ export default function Home({ session }) {
       {view === 'history' && (
         <div className="page">
           <h1 className="page-title">your entries</h1>
-          {entries.length === 0
-            ? <p className="empty">no entries yet — write your first one!</p>
-            : <div className="entries-list">
-                {entries.map(e => (
-                  <div className="entry-card" key={e.id}>
-                    <div className="entry-q">{e.question}</div>
-                    <div className="entry-a">{e.answer}</div>
-                    <div className="entry-date">{new Date(e.created_at).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>
-                  </div>
-                ))}
-              </div>
-          }
+          <HistoryView entries={entries} />
         </div>
       )}
 
