@@ -90,6 +90,8 @@ body {
 .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .chart-title { font-family: 'Cormorant Garamond', serif; font-size: 16px; font-style: italic; color: var(--lavender); }
 .chart-toggles { display: flex; gap: 6px; }
+.chart-label { fill: rgba(0,84,153,0.45); }
+.chart-gridline { stroke: rgba(0,84,153,0.08); }
 .chart-pill { background: transparent; border: 1px solid var(--card-border); color: var(--text-muted); font-family: 'Space Mono', monospace; font-size: 10px; padding: 4px 10px; border-radius: 20px; cursor: pointer; transition: all 0.2s; text-transform: lowercase; }
 .chart-pill:hover { border-color: var(--lavender); color: var(--lavender); }
 .chart-pill.active { background: var(--lavender); border-color: var(--lavender); color: #fff; }
@@ -130,6 +132,60 @@ body {
 .btn-save { background: var(--orange); color: #fff; border: none; border-radius: 8px; padding: 10px 24px; font-family: 'Quicksand', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
 .btn-save:hover { background: var(--accent-hover); }
 .btn-save:disabled { opacity: 0.6; cursor: not-allowed; }
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text:        #FFA6C9;
+    --text-muted:  rgba(118, 215, 196, 0.5);
+    --text-soft:   rgba(118, 215, 196, 0.85);
+    --card-bg:     rgba(0, 84, 153, 0.22);
+    --card-border: rgba(118, 215, 196, 0.18);
+    --input-bg:    rgba(0, 84, 153, 0.2);
+    --hover-bg:    rgba(0, 84, 153, 0.35);
+    --blue:        #76D7C4;
+    --accent-dark: #0A0B16;
+  }
+
+  body {
+    background:
+      radial-gradient(ellipse at 15% 15%, rgba(255, 166, 201, 0.45) 0%, transparent 50%),
+      radial-gradient(ellipse at 85% 10%, rgba(118, 215, 196, 0.38) 0%, transparent 45%),
+      radial-gradient(ellipse at 65% 80%, rgba(195, 155, 211, 0.35) 0%, transparent 50%),
+      radial-gradient(ellipse at 5%  75%, rgba(255, 166, 201, 0.30) 0%, transparent 45%),
+      radial-gradient(ellipse at 50% 50%, rgba(0,  84,  153, 0.25) 0%, transparent 60%),
+      #0A0B16;
+  }
+
+  .nav { background: rgba(118, 215, 196, 0.12); border-color: rgba(118, 215, 196, 0.28); }
+  .nav-logo { color: #FFA6C9; }
+
+  .popup-overlay { background: rgba(10, 11, 22, 0.65); }
+  .popup { background: rgba(0, 84, 153, 0.4); border-color: rgba(118, 215, 196, 0.2); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
+
+  .entry-card:hover { background: rgba(0, 84, 153, 0.35); box-shadow: 0 4px 24px rgba(0,0,0,0.3); }
+  .entry-q  { color: #C39BD3; }
+  .entry-a  { color: var(--text-soft); }
+
+  .stat-pill { background: rgba(0, 84, 153, 0.3); border-color: rgba(118, 215, 196, 0.2); color: #76D7C4; }
+
+  .stats-card { box-shadow: 0 4px 24px rgba(0,0,0,0.3); }
+  .stats-card.big { background: rgba(247, 151, 29, 0.1); border-color: rgba(247, 151, 29, 0.25); }
+  .stats-num { color: #76D7C4; }
+
+  .chart-pill.active { background: var(--lavender); border-color: var(--lavender); color: #0A0B16; }
+  .category-pill.active { background: var(--lavender); border-color: var(--lavender); color: #0A0B16; }
+
+  .entry-category--gratitude  { background: rgba(255,166,201,0.12); color: #FFA6C9; }
+  .entry-category--compassion { background: rgba(195,155,211,0.12); color: #C39BD3; }
+  .entry-category--values     { background: rgba(118,215,196,0.12); color: #76D7C4; }
+  .entry-category--emotions   { background: rgba(247,151,29,0.12);  color: #F7971D; }
+  .entry-category--grounding  { background: rgba(118,215,196,0.10); color: #76D7C4; }
+
+  .auth-card { box-shadow: 0 8px 48px rgba(0,0,0,0.4); }
+
+  .chart-label { fill: rgba(118, 215, 196, 0.7); }
+  .chart-gridline { stroke: rgba(118, 215, 196, 0.1); }
+}
 
 @media (max-width: 600px) {
   .nav { padding: 16px 20px; }

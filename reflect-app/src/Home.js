@@ -76,6 +76,9 @@ function pickQuestion() {
 function buildBuckets(entries, period) {
   const now = new Date()
   const buckets = []
+  const pad = n => String(n).padStart(2, '0')
+  const toLocalDate = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`
+  const todayStr = toLocalDate(now)
 
   if (period === 'day') {
     for (let h = 0; h < 24; h++) {
@@ -83,32 +86,43 @@ function buildBuckets(entries, period) {
       buckets.push({ label, hour: h })
     }
   } else if (period === 'week') {
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(now); d.setDate(d.getDate() - i * 7)
-      const start = new Date(d); start.setDate(d.getDate() - d.getDay()); start.setHours(0,0,0,0)
-      const end   = new Date(start); end.setDate(start.getDate() + 7)
-      buckets.push({ label: start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), start, end })
+    // Mon–Sun of the current week
+    const monday = new Date(now)
+    monday.setDate(now.getDate() - ((now.getDay() + 6) % 7))
+    monday.setHours(0, 0, 0, 0)
+    const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+    for (let i = 0; i < 7; i++) {
+      const start = new Date(monday); start.setDate(monday.getDate() + i)
+      const end   = new Date(start);  end.setDate(start.getDate() + 1)
+      buckets.push({ label: days[i], start, end })
     }
   } else if (period === 'month') {
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
-      const end = new Date(d.getFullYear(), d.getMonth() + 1, 1)
-      buckets.push({ label: d.toLocaleDateString('en-US', { month: 'short' }), start: d, end })
+    // Weeks within the current month
+    const y = now.getFullYear(), m = now.getMonth()
+    const firstDay = new Date(y, m, 1)
+    const lastDay  = new Date(y, m + 1, 0)
+    let weekStart = new Date(firstDay)
+    let weekNum = 1
+    while (weekStart <= lastDay) {
+      const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 7)
+      buckets.push({ label: `Wk ${weekNum}`, start: new Date(weekStart), end: weekEnd })
+      weekStart.setDate(weekStart.getDate() + 7)
+      weekNum++
     }
   } else if (period === 'year') {
-    const years = [...new Set(entries.map(e => new Date(e.created_at).getFullYear()))].sort()
-    if (years.length === 0) years.push(now.getFullYear())
-    years.forEach(y => {
-      buckets.push({ label: String(y), start: new Date(y, 0, 1), end: new Date(y + 1, 0, 1) })
-    })
+    // Jan–Dec of the current year
+    const y = now.getFullYear()
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    for (let m = 0; m < 12; m++) {
+      buckets.push({ label: months[m], start: new Date(y, m, 1), end: new Date(y, m + 1, 1) })
+    }
   }
 
-  const todayStr = now.toISOString().split('T')[0]
   return buckets.map(b => ({
     ...b,
     count: entries.filter(e => {
       const d = new Date(e.created_at)
-      if (period === 'day') return e.created_at.split('T')[0] === todayStr && d.getHours() === b.hour
+      if (period === 'day') return toLocalDate(d) === todayStr && d.getHours() === b.hour
       return d >= b.start && d < b.end
     }).length,
   }))
@@ -145,8 +159,8 @@ function EntryChart({ entries }) {
           const y = padT + chartH - (t / maxCount) * chartH
           return (
             <g key={t}>
-              <line x1={padL} x2={W - padR} y1={y} y2={y} stroke="rgba(0,84,153,0.08)" strokeWidth="1" />
-              <text x={padL - 6} y={y + 4} textAnchor="end" fontSize="9" fill="rgba(0,84,153,0.4)" fontFamily="Space Mono, monospace">{t}</text>
+              <line x1={padL} x2={W - padR} y1={y} y2={y} className="chart-gridline" strokeWidth="1" />
+              <text x={padL - 6} y={y + 4} textAnchor="end" fontSize="9" className="chart-label" fontFamily="Space Mono, monospace">{t}</text>
             </g>
           )
         })}
@@ -160,7 +174,7 @@ function EntryChart({ entries }) {
                 rx="3" fill={b.count > 0 ? 'var(--lavender)' : 'rgba(195,155,211,0.15)'} opacity="0.85" />
               {b.label && (
                 <text x={padL + i * gap + gap / 2} y={H - 4} textAnchor="middle"
-                  fontSize="9" fill="rgba(0,84,153,0.4)" fontFamily="Space Mono, monospace">{b.label}</text>
+                  fontSize="9" className="chart-label" fontFamily="Space Mono, monospace">{b.label}</text>
               )}
             </g>
           )
