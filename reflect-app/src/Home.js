@@ -244,7 +244,7 @@ export default function Home({ session }) {
   const [questionCategory, setQuestionCategory] = useState('')
   const [answer, setAnswer] = useState('')
   const [saving, setSaving] = useState(false)
-  const [stats, setStats] = useState({ total: 0, streak: 0, thisWeek: 0 })
+  const [stats, setStats] = useState({ total: 0, streak: 0, thisWeek: 0, totalSkips: 0, skipNudge: false })
   const [lastPopup, setLastPopup] = useState(null)
   const [hoursLeft, setHoursLeft] = useState(null)
   const [showAbstract, setShowAbstract] = useState(false)
@@ -333,13 +333,14 @@ export default function Home({ session }) {
   }
 
   function computeStats(data) {
-    const total = data.length
+    const answered = data.filter(e => !e.skipped)
+    const total = answered.length
     const now = new Date()
     const oneWeekAgo = new Date(now - 7 * 24 * 3600000)
-    const thisWeek = data.filter(e => new Date(e.created_at) > oneWeekAgo).length
+    const thisWeek = answered.filter(e => new Date(e.created_at) > oneWeekAgo).length
 
-    // Streak: consecutive days with at least one entry
-    const days = [...new Set(data.map(e => new Date(e.created_at).toDateString()))]
+    // Streak: consecutive days with at least one answered entry
+    const days = [...new Set(answered.map(e => new Date(e.created_at).toDateString()))]
     let streak = 0
     let check = new Date()
     check.setHours(0, 0, 0, 0)
@@ -349,7 +350,16 @@ export default function Home({ session }) {
         check.setDate(check.getDate() - 1)
       } else break
     }
-    setStats({ total, streak, thisWeek })
+
+    // Skip nudge: more skips than answers today
+    const todayStr = new Date().toDateString()
+    const todayAll = data.filter(e => new Date(e.created_at).toDateString() === todayStr)
+    const todaySkips = todayAll.filter(e => e.skipped).length
+    const todayAnswered = todayAll.filter(e => !e.skipped).length
+    const skipNudge = todaySkips > 0 && todaySkips > todayAnswered
+
+    const totalSkips = data.filter(e => e.skipped).length
+    setStats({ total, streak, thisWeek, totalSkips, skipNudge })
   }
 
   const handleSubmit = async () => {
@@ -370,10 +380,17 @@ export default function Home({ session }) {
   }
 
   const handleSkip = async () => {
+    await supabase.from('journal_entries').insert({
+      user_id: userId,
+      question,
+      category: questionCategory,
+      skipped: true,
+    })
     await supabase.from('activity_tracker')
       .upsert({ user_id: userId, last_popup_shown: new Date().toISOString() }, { onConflict: 'user_id' })
     setShowPopup(false)
     setHoursLeft(HOURS_BETWEEN_POPUPS)
+    fetchEntries()
   }
 
   const handleSignOut = () => supabase.auth.signOut()
@@ -434,13 +451,16 @@ export default function Home({ session }) {
             <button className="btn-journal" onClick={triggerPopup}>
               write now ✦
             </button>
+            {stats.skipNudge && (
+              <div className="skip-nudge">hey — make some time for yourself to reflect today ✦</div>
+            )}
           </div>
 
-          {entries.length > 0 && (
+          {entries.filter(e => !e.skipped).length > 0 && (
             <div className="recent-section">
               <h2 className="section-title">recent</h2>
               <div className="entries-list">
-                {entries.slice(0, 3).map(e => (
+                {entries.filter(e => !e.skipped).slice(0, 3).map(e => (
                   <div className="entry-card" key={e.id}>
                     <div className="entry-q">{e.question}</div>
                     <div className="entry-a">{e.answer}</div>
@@ -480,8 +500,12 @@ export default function Home({ session }) {
               <div className="stats-label">this week</div>
             </div>
             <div className="stats-card">
-              <div className="stats-num">{entries.length > 0 ? Math.round(entries.reduce((a, e) => a + e.answer.split(' ').length, 0) / entries.length) : 0}</div>
+              <div className="stats-num">{entries.filter(e => !e.skipped).length > 0 ? Math.round(entries.filter(e => !e.skipped).reduce((a, e) => a + (e.answer || '').split(' ').length, 0) / entries.filter(e => !e.skipped).length) : 0}</div>
               <div className="stats-label">avg words / entry</div>
+            </div>
+            <div className="stats-card">
+              <div className="stats-num">{stats.totalSkips}</div>
+              <div className="stats-label">skipped</div>
             </div>
           </div>
 

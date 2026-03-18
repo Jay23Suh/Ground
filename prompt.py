@@ -232,6 +232,7 @@ def push_to_supabase(client, user_id, question, category, answer, submitted_at):
             "question": question,
             "category": category,
             "answer": answer,
+            "skipped": False,
         }).execute()
         client.table("activity_tracker").upsert(
             {"user_id": user_id, "last_popup_shown": submitted_at.isoformat()},
@@ -240,8 +241,14 @@ def push_to_supabase(client, user_id, question, category, answer, submitted_at):
     except Exception as e:
         print(f"[reflect] supabase error: {e}")
 
-def push_skip_to_supabase(client, user_id, now):
+def push_skip_to_supabase(client, user_id, question, category, now):
     try:
+        client.table("journal_entries").insert({
+            "user_id": user_id,
+            "question": question,
+            "category": category,
+            "skipped": True,
+        }).execute()
         client.table("activity_tracker").upsert(
             {"user_id": user_id, "last_popup_shown": now.isoformat()},
             on_conflict="user_id",
@@ -503,7 +510,7 @@ def show_prompt():
         if auth_thread:
             auth_thread.join(timeout=5)
         if sb[0] and sb[1]:
-            push_skip_to_supabase(sb[0], sb[1], now)
+            push_skip_to_supabase(sb[0], sb[1], question, category, now)
         root.destroy()
 
     answer_box.bind("<Command-Return>", submit)

@@ -68,6 +68,10 @@ function computeStats(entries) {
   const topCategoryEntry = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1])[0]
   const topCategory = topCategoryEntry ? topCategoryEntry[0] : null
 
+  const totalSkips = entries.filter(e => e.skipped).length
+  const totalAll = entries.length
+  const skipRate = totalAll > 0 ? Math.round((totalSkips / totalAll) * 100) : 0
+
   return {
     totalEntries: answered.length,
     totalWords,
@@ -76,6 +80,8 @@ function computeStats(entries) {
     mostActiveDay,
     mostActiveHour,
     topCategory,
+    totalSkips,
+    skipRate,
   }
 }
 
@@ -240,6 +246,17 @@ function buildSlides(entries) {
       type: 'text', bg: '#0d0a1a', accent: '#C39BD3',
       headline: CATEGORY_LABELS[stats.topCategory] || stats.topCategory,
       subtext: CATEGORY_SUBTEXTS[stats.topCategory] || 'the theme you kept coming back to.',
+    })
+  }
+
+  if (stats.totalSkips > 0) {
+    const skipMsg = stats.skipRate >= 50
+      ? 'it\'s okay — but make some time for yourself to reflect.'
+      : 'you showed up most of the time. that matters.'
+    defs.push({
+      type: 'text', bg: '#100a18', accent: '#FFA6C9',
+      headline: `${stats.totalSkips} skipped this week`,
+      subtext: skipMsg,
     })
   }
 
