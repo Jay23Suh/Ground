@@ -5,7 +5,6 @@ import Abstract from './Wrapped'
 const QUESTIONS = {
   gratitude: [
     "What's something you're grateful for in this exact moment?",
-    "What's one thing about your body you appreciate today?",
     "What's something in your surroundings you feel thankful for?",
     "What's a routine or habit you're glad you have?",
     "What's a comfort you enjoyed today — food, warmth, rest, music?",
@@ -33,7 +32,7 @@ const QUESTIONS = {
     "What's an area of life where you want to show up more fully?",
     "What gave you a sense of purpose today, even briefly?",
     "What kind of person do you want to be in small, daily moments?",
-    "What value — honesty, curiosity, kindness — felt strongest in you today?",
+    "What value felt strongest in you today?",
     "What's one tiny action you took that moved you toward the life you want?",
     "Where did you choose what mattered over what was easiest today?",
     "What's something you said no to that protected what you care about?",
@@ -41,7 +40,6 @@ const QUESTIONS = {
   ],
   emotions: [
     "What emotion is most noticeable in you right now?",
-    "Where did you feel that emotion in your body today?",
     "What's something that felt surprisingly heavy today?",
     "What's something that felt surprisingly light or easy today?",
     "What emotion did you try to push away, and why?",
@@ -55,10 +53,8 @@ const QUESTIONS = {
     "What sensations can you feel in your body right now?",
     "What are three things you can see, two you can hear, and one you can feel?",
     "What does your breathing actually feel like in this moment?",
-    "What's one place in your body that feels okay or neutral?",
     "What's a small detail around you that you hadn't noticed before?",
     "What tells you that you are safe enough in this moment?",
-    "How does your body feel when you gently unclench your jaw and shoulders?",
     "What's one thing you can let go of, just for the next minute?",
     "What's a small action you could take right now to feel 5% more settled?",
     "If you named this moment as a weather pattern, what would it be?",
@@ -384,6 +380,7 @@ export default function Home({ session }) {
       user_id: userId,
       question,
       category: questionCategory,
+      answer: null,
       skipped: true,
     })
     await supabase.from('activity_tracker')
