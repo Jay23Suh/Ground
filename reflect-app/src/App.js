@@ -8,7 +8,9 @@ import './App.css'
 export default function App() {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [isRecovery, setIsRecovery] = useState(false)
+  const [isRecovery, setIsRecovery] = useState(
+    window.location.hash.includes('type=recovery')
+  )
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
