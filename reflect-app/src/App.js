@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { supabase } from './supabase'
+import { supabase, isPasswordRecovery } from './supabase'
 import Auth from './Auth'
 import Home from './Home'
 import ResetPassword from './ResetPassword'
@@ -8,25 +8,32 @@ import './App.css'
 export default function App() {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [isRecovery, setIsRecovery] = useState(
-    window.location.hash.includes('type=recovery')
-  )
+  // Seed from URL hash — captured before Supabase clears it
+  const [isRecovery, setIsRecovery] = useState(isPasswordRecovery)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setLoading(false)
-    })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'PASSWORD_RECOVERY') {
         setIsRecovery(true)
         setSession(session)
-      } else {
+        setLoading(false)
+      } else if (event === 'SIGNED_OUT') {
         setIsRecovery(false)
+        setSession(null)
+        setLoading(false)
+      } else {
+        // INITIAL_SESSION or SIGNED_IN — only update session, don't clear recovery
         setSession(session)
+        setLoading(false)
       }
     })
-    return () => subscription.unsubscribe()
+
+    const timeout = setTimeout(() => setLoading(false), 1000)
+
+    return () => {
+      subscription.unsubscribe()
+      clearTimeout(timeout)
+    }
   }, [])
 
   if (loading) return (

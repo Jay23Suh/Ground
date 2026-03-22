@@ -37,11 +37,11 @@ export default function Auth() {
         <div className="auth-header">
           <span className="auth-star">✦</span>
           <h1>a moment to reflect</h1>
-          <p>your daily journaling companion</p>
+          <p>{isForgot ? 'enter your email to reset your password' : 'your daily journaling companion'}</p>
         </div>
 
         <div className="auth-form">
-          {!isLogin && (
+          {!isLogin && !isForgot && (
             <input
               className="auth-input"
               type="text"
@@ -57,14 +57,16 @@ export default function Auth() {
             value={email}
             onChange={e => setEmail(e.target.value)}
           />
-          <input
-            className="auth-input"
-            type="password"
-            placeholder="password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSubmit()}
-          />
+          {!isForgot && (
+            <input
+              className="auth-input"
+              type="password"
+              placeholder="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+            />
+          )}
           {message && <p className="auth-message">{message}</p>}
           {isForgot ? (
             <>
