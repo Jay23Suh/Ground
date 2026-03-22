@@ -6,7 +6,9 @@ enum AbstractSlideType {
     case title
     case count(bg: Color, accent: Color, value: Int, label: String, context: String)
     case text(bg: Color, accent: Color, headline: String, subtext: String)
-    case closing
+    case quote(bg: Color, accent: Color, quote: String, context: String)
+    case wordCloud(bg: Color, words: [(word: String, rank: Int)])
+    case closing(message: String)
 }
 
 struct AbstractSlide: Identifiable {
@@ -200,8 +202,93 @@ struct AbstractView: View {
             )))
         }
 
-        s.append(.init(type: .closing))
+        // Most used word + word cloud
+        let topWords = computeTopWords()
+        if let topWord = topWords.first {
+            s.append(.init(type: .text(
+                bg: Color(hex: "#0a0510"),
+                accent: Color(hex: "#C39BD3"),
+                headline: topWord,
+                subtext: "your most used word"
+            )))
+        }
+        if topWords.count >= 3 {
+            s.append(.init(type: .wordCloud(
+                bg: Color(hex: "#08080f"),
+                words: topWords.prefix(7).enumerated().map { (word: $0.element, rank: $0.offset) }
+            )))
+        }
+
+        // Pull quote from longest entry
+        if let longest = entries.filter({ !$0.skipped }).max(by: { $0.wordCount < $1.wordCount }),
+           longest.wordCount > 10,
+           let quote = extractFirstSentence(longest.answer ?? "") {
+            s.append(.init(type: .quote(
+                bg: Color(hex: "#050d12"),
+                accent: Color(hex: "#60d4e8"),
+                quote: quote,
+                context: "from your longest entry"
+            )))
+        }
+
+        s.append(.init(type: .closing(message: closingMessage())))
         return s
+    }
+
+    private func extractFirstSentence(_ text: String) -> String? {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cleaned.count > 15 else { return nil }
+        let enders = CharacterSet(charactersIn: ".!?")
+        if let range = cleaned.rangeOfCharacter(from: enders), range.lowerBound > cleaned.startIndex {
+            let sentence = String(cleaned[..<range.upperBound])
+            if sentence.count > 15 { return sentence }
+        }
+        return cleaned.count > 120 ? String(cleaned.prefix(120)) + "…" : cleaned
+    }
+
+    private func computeTopWords() -> [String] {
+        let stopWords: Set<String> = [
+            "i","me","my","we","our","you","your","he","him","his","she","her","it","its",
+            "they","them","their","what","which","who","this","that","these","those",
+            "am","is","are","was","were","be","been","being","have","has","had","do","does",
+            "did","a","an","the","and","but","if","or","as","of","at","by","for","with",
+            "about","into","through","before","after","to","from","up","down","in","out",
+            "on","off","so","than","just","not","no","nor","all","both","more","most",
+            "other","some","when","where","how","will","can","could","would","should",
+            "now","then","here","there","very","also","too","only","even","still",
+            "really","like","feel","felt","get","got","think","know","want","need",
+            "make","made","today","one","two","time","day","days","thing","things","little",
+            "lot","much","many","back","well","way","see","going","something","anything",
+            "d","ll","m","re","s","t","ve","didn","don","won","isn","wasn","can't","i'm",
+            "i've","i'd","it's","that's","been","actually","always","never","ever",
+        ]
+        var freq: [String: Int] = [:]
+        for entry in entries where !entry.skipped {
+            guard let text = entry.answer else { continue }
+            let words = text.lowercased()
+                .components(separatedBy: .init(charactersIn: " \n\t.,!?;:\"'()-"))
+                .map { $0.trimmingCharacters(in: .punctuationCharacters) }
+                .filter { $0.count > 3 && !stopWords.contains($0) }
+            for word in words { freq[word, default: 0] += 1 }
+        }
+        return freq.filter { $0.value >= 2 }
+            .sorted { $0.value > $1.value }
+            .prefix(8)
+            .map(\.key)
+    }
+
+    private func closingMessage() -> String {
+        if stats.longestStreak >= 7 {
+            return "consistency is\na form of love ✦"
+        }
+        switch stats.topCategory {
+        case "gratitude":   return "you already have\nenough ✦"
+        case "compassion":  return "be gentle\nwith yourself ✦"
+        case "values":      return "keep asking what\nmatters ✦"
+        case "emotions":    return "feeling is\nalso healing ✦"
+        case "grounding":   return "the present\nis enough ✦"
+        default:            return "keep showing up\nfor yourself ✦"
+        }
     }
 }
 
@@ -227,10 +314,18 @@ struct AbstractSlideView: View {
                 TextSlideView(visible: visible, appeared: appeared,
                               bg: bg, accent: accent,
                               headline: headline, subtext: subtext)
-            case .closing:
-                ClosingSlideView(visible: visible, appeared: appeared)
+            case let .quote(bg, accent, quote, context):
+                QuoteSlideView(visible: visible, appeared: appeared,
+                               bg: bg, accent: accent,
+                               quote: quote, context: context)
+            case let .wordCloud(bg, words):
+                WordCloudSlideView(visible: visible, appeared: appeared,
+                                   bg: bg, words: words)
+            case let .closing(message):
+                ClosingSlideView(visible: visible, appeared: appeared, message: message)
             }
         }
+        .overlay(NoiseOverlay())
         .opacity(visible ? 1 : 0)
         .offset(y: visible ? 0 : 32)
         .animation(.easeInOut(duration: 0.55), value: visible)
@@ -344,21 +439,62 @@ struct TextSlideView: View {
     var body: some View {
         ZStack { bg.ignoresSafeArea()
             VStack(spacing: 28) {
-                Text(headline)
-                    .font(RFont.header(44))
-                    .foregroundColor(accent)
+                TypewriterText(text: headline,
+                               font: RFont.header(44),
+                               color: accent,
+                               trigger: appeared,
+                               delay: 0.15,
+                               speed: min(0.04, 1.8 / Double(max(1, headline.count))))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 48)
-                    .opacity(appeared ? 1 : 0)
-                    .offset(y: appeared ? 0 : 16)
-                    .animation(.easeOut(duration: 0.55).delay(0.1), value: appeared)
                 Text(subtext)
                     .font(RFont.header(18, italic: true))
                     .foregroundColor(Color.white.opacity(0.5))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 60)
                     .opacity(appeared ? 1 : 0)
-                    .animation(.easeOut(duration: 0.5).delay(0.3), value: appeared)
+                    .animation(.easeOut(duration: 0.5).delay(0.6), value: appeared)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct QuoteSlideView: View {
+    let visible: Bool
+    let appeared: Bool
+    let bg: Color
+    let accent: Color
+    let quote: String
+    let context: String
+
+    var body: some View {
+        ZStack { bg.ignoresSafeArea()
+            VStack(spacing: 0) {
+                Text("\u{201C}")
+                    .font(RFont.header(96))
+                    .foregroundColor(accent.opacity(0.25))
+                    .padding(.bottom, -32)
+                    .opacity(appeared ? 1 : 0)
+                    .animation(.easeOut(duration: 0.4).delay(0.05), value: appeared)
+
+                TypewriterText(text: quote,
+                               font: RFont.header(24, italic: true),
+                               color: Color.white.opacity(0.88),
+                               trigger: appeared,
+                               delay: 0.2,
+                               speed: min(0.025, 2.5 / Double(max(1, quote.count))))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 52)
+
+                Text(context)
+                    .font(.system(size: 10, weight: .regular, design: .monospaced))
+                    .tracking(3)
+                    .textCase(.uppercase)
+                    .foregroundColor(accent.opacity(0.4))
+                    .padding(.top, 28)
+                    .opacity(appeared ? 1 : 0)
+                    .animation(.easeOut(duration: 0.4).delay(0.8), value: appeared)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -368,6 +504,7 @@ struct TextSlideView: View {
 struct ClosingSlideView: View {
     let visible: Bool
     let appeared: Bool
+    let message: String
 
     var body: some View {
         ZStack { Color(hex: "#110d07").ignoresSafeArea()
@@ -379,7 +516,7 @@ struct ClosingSlideView: View {
                     .padding(.bottom, 28)
                     .opacity(appeared ? 1 : 0)
                     .animation(.easeOut(duration: 0.4).delay(0.1), value: appeared)
-                Text("keep showing up\nfor yourself ✦")
+                Text(message)
                     .font(RFont.header(48))
                     .foregroundColor(Color(hex: "#f0c060"))
                     .multilineTextAlignment(.center)
@@ -389,5 +526,118 @@ struct ClosingSlideView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Word Cloud Slide
+
+struct WordCloudSlideView: View {
+    let visible: Bool
+    let appeared: Bool
+    let bg: Color
+    let words: [(word: String, rank: Int)]
+
+    // Fixed scatter layout: (dx, dy, rotation degrees, size)
+    private let layout: [(CGFloat, CGFloat, Double, CGFloat)] = [
+        (  0,   0,   0, 52),   // center — largest
+        (-95, -44,  -4, 32),
+        ( 88, -38,   3, 28),
+        (-75,  52,  -2, 26),
+        ( 80,  56,   5, 24),
+        (  6, -88,  -3, 21),
+        (-28,  88,   2, 19),
+    ]
+
+    var body: some View {
+        ZStack {
+            bg.ignoresSafeArea()
+            Text("your words")
+                .font(.system(size: 10, weight: .regular, design: .monospaced))
+                .tracking(4).textCase(.uppercase)
+                .foregroundColor(Color.white.opacity(0.15))
+                .offset(y: -140)
+                .opacity(appeared ? 1 : 0)
+                .animation(.easeOut(duration: 0.4).delay(0.05), value: appeared)
+
+            ZStack {
+                ForEach(Array(words.prefix(7).enumerated()), id: \.offset) { i, item in
+                    let (dx, dy, rot, size) = layout[i]
+                    let opacity = i == 0 ? 0.92 : max(0.3, 0.75 - Double(i) * 0.08)
+                    Text(item.word)
+                        .font(RFont.header(size))
+                        .foregroundColor(Color.white.opacity(opacity))
+                        .rotationEffect(.degrees(rot))
+                        .offset(x: dx, y: dy)
+                        .opacity(appeared ? 1 : 0)
+                        .animation(.easeOut(duration: 0.45).delay(0.1 + Double(i) * 0.11), value: appeared)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Noise Overlay
+
+struct NoiseOverlay: View {
+    // Deterministic pseudo-random positions — never flickers
+    private static let positions: [(CGFloat, CGFloat, CGFloat)] = {
+        var pts: [(CGFloat, CGFloat, CGFloat)] = []
+        var seed: UInt64 = 0xdeadbeef
+        func next() -> CGFloat {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return CGFloat(seed >> 33) / CGFloat(0x7FFFFFFF)
+        }
+        for _ in 0..<280 {
+            pts.append((next(), next(), next()))   // x, y, size
+        }
+        return pts
+    }()
+
+    var body: some View {
+        GeometryReader { geo in
+            Canvas { ctx, size in
+                for (nx, ny, ns) in NoiseOverlay.positions {
+                    let r = CGRect(x: nx * size.width, y: ny * size.height,
+                                   width: 1.0 + ns * 0.8, height: 1.0 + ns * 0.8)
+                    ctx.fill(Path(ellipseIn: r), with: .color(.white.opacity(0.028 + Double(ns) * 0.018)))
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Typewriter Text
+
+struct TypewriterText: View {
+    let text: String
+    let font: Font
+    let color: Color
+    let trigger: Bool
+    var delay: Double = 0
+    var speed: Double = 0.03
+
+    @State private var displayed = ""
+
+    var body: some View {
+        Text(displayed)
+            .font(font)
+            .foregroundColor(color)
+            .onChange(of: trigger) { _, isActive in
+                if isActive { startAnimation() } else { displayed = "" }
+            }
+            .onAppear { if trigger { startAnimation() } }
+    }
+
+    private func startAnimation() {
+        displayed = ""
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            for (i, char) in text.enumerated() {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * speed) {
+                    displayed.append(char)
+                }
+            }
+        }
     }
 }

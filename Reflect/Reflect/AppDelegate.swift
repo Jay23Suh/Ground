@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import UserNotifications
+import CoreGraphics
 
 class KeyableWindow: NSWindow {
     override var canBecomeKey: Bool  { true }
@@ -22,14 +24,19 @@ class KeyableHideOnCloseWindow: KeyableWindow, NSWindowDelegate {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
-    private var scheduler: NSBackgroundActivityScheduler?
-    private var popupWindow: KeyableHideOnCloseWindow?
-    private var mainWindow:  HideOnCloseWindow?
-    private var setupWindow: HideOnCloseWindow?
+class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    private var checkTimer: Timer?
+    private var activeSeconds: TimeInterval = 0
+    private let targetActiveSeconds: TimeInterval = 2 * 60 * 60  // 2 hours of use
+    private let idleThreshold: TimeInterval = 5 * 60             // 5 min idle = paused
+    private var popupWindow:       KeyableHideOnCloseWindow?
+    private var mainWindow:        HideOnCloseWindow?
+    private var setupWindow:       HideOnCloseWindow?
+    private var onboardingWindow:  HideOnCloseWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        UNUserNotificationCenter.current().delegate = self
         setupScheduler()
         let nc = NotificationCenter.default
         nc.addObserver(forName: .showJournalPopup, object: nil, queue: .main) { [weak self] _ in
@@ -37,16 +44,67 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         nc.addObserver(forName: .showMainWindow,  object: nil, queue: .main) { [weak self] _ in self?.showMain() }
         nc.addObserver(forName: .showSetupWindow, object: nil, queue: .main) { [weak self] _ in self?.showSetup() }
+
+        if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+            showOnboarding()
+        }
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                 didReceive response: UNNotificationResponse,
+                                 withCompletionHandler completionHandler: @escaping () -> Void) {
+        DispatchQueue.main.async { self.showPopup() }
+        completionHandler()
+    }
+
+    // Suppress banner if popup is already on screen
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                 willPresent notification: UNNotification,
+                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let popupVisible = popupWindow?.isVisible ?? false
+        completionHandler(popupVisible ? [] : [.banner, .sound])
     }
 
     private func setupScheduler() {
-        scheduler = NSBackgroundActivityScheduler(identifier: "com.reflect.popup")
-        scheduler?.interval = 2 * 60 * 60
-        scheduler?.tolerance = 5 * 60
-        scheduler?.repeats = true
-        scheduler?.schedule { [weak self] completion in
-            DispatchQueue.main.async { self?.showPopup() }
-            completion(.finished)
+        // Tick every 60s; only count time when user is not idle
+        checkTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.tickActiveTime()
+        }
+    }
+
+    private func tickActiveTime() {
+        // Seconds since last keyboard/mouse event (any input type)
+        let idleTime = CGEventSource.secondsSinceLastEventType(
+            .combinedSessionState,
+            eventType: CGEventType(rawValue: UInt32(~0))!
+        )
+        if idleTime < idleThreshold {
+            activeSeconds += 60
+        }
+        if activeSeconds >= targetActiveSeconds {
+            activeSeconds = 0
+            showPopup()
+            fireJournalNotification()
+        }
+    }
+
+    private func fireJournalNotification() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "time to reflect ✦"
+            content.body = PopupState.shared.question.isEmpty
+                ? "take a moment to check in with yourself."
+                : PopupState.shared.question
+            content.sound = .default
+            let request = UNNotificationRequest(
+                identifier: UUID().uuidString,
+                content: content,
+                trigger: nil
+            )
+            UNUserNotificationCenter.current().add(request)
         }
     }
 
@@ -117,5 +175,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         setupWindow = w
+    }
+
+    func showOnboarding() {
+        if let w = onboardingWindow { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
+        let w = HideOnCloseWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 540),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered, defer: false
+        )
+        w.delegate = w
+        w.title = ""
+        w.titlebarAppearsTransparent = true
+        w.contentViewController = NSHostingController(
+            rootView: OnboardingView(onComplete: { [weak self] in
+                self?.onboardingWindow?.orderOut(nil)
+                self?.showMain()
+            }).environmentObject(SupabaseManager.shared)
+        )
+        w.center()
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        onboardingWindow = w
     }
 }

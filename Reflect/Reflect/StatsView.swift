@@ -37,11 +37,28 @@ struct StatsView: View {
 
                 // Secondary stats
                 HStack(spacing: 12) {
-                    StatCard(label: "avg words/entry", value: stats.avgWords > 0 ? "\(stats.avgWords)" : "—")
-                    StatCard(label: "longest streak", value: stats.longestStreak > 0 ? "\(stats.longestStreak)d" : "—")
-                    StatCard(label: "most active", value: stats.mostActiveDay ?? "—")
-                    StatCard(label: "skip rate", value: stats.totalPrompts > 0 ? "\(Int(stats.skipRate * 100))%" : "—")
+                    StatCard(label: "avg words/entry",  value: stats.avgWords > 0 ? "\(stats.avgWords)" : "—")
+                    StatCard(label: "current streak",   value: stats.currentStreak > 0 ? "\(stats.currentStreak)d" : "—")
+                    StatCard(label: "longest streak",   value: stats.longestStreak > 0 ? "\(stats.longestStreak)d" : "—")
+                    StatCard(label: "skip rate",        value: stats.totalPrompts > 0 ? "\(Int(stats.skipRate * 100))%" : "—")
                 }
+
+                // Consistency + most active day
+                HStack(spacing: 12) {
+                    StatCard(label: "\(stats.consistencyWindowDays)d consistency", value: "\(Int(stats.consistencyLast30 * 100))%")
+                    StatCard(label: "most active day",    value: stats.mostActiveDay ?? "—")
+                    if let h = stats.mostActiveHour {
+                        StatCard(label: "peak hour", value: hourLabel(h))
+                    }
+                }
+
+                // Category breakdown
+                if !stats.categoryBreakdown.isEmpty {
+                    CategoryBreakdownView(breakdown: stats.categoryBreakdown)
+                }
+
+                // When you write
+                HourPatternView(distribution: stats.hourDistribution)
 
                 // Chart
                 EntryChartView(entries: entries)
@@ -49,6 +66,12 @@ struct StatsView: View {
             .padding(32)
         }
     }
+}
+
+private func hourLabel(_ h: Int) -> String {
+    if h == 0  { return "12am" }
+    if h == 12 { return "12pm" }
+    return h < 12 ? "\(h)am" : "\(h - 12)pm"
 }
 
 struct BigStatCard: View {
@@ -107,10 +130,15 @@ struct ReflectStats {
     let totalWords: Int
     let avgWords: Int
     let longestStreak: Int
+    let currentStreak: Int
+    let consistencyLast30: Double
+    let consistencyWindowDays: Int
     let mostActiveDay: String?
     let mostActiveHour: Int?
     let topCategory: String?
     let skipRate: Double
+    let categoryBreakdown: [(key: String, label: String, count: Int, pct: Double)]
+    let hourDistribution: [Int]
 
     init(entries: [Entry]) {
         let answered = entries.filter { !$0.skipped }
@@ -124,6 +152,7 @@ struct ReflectStats {
         skipRate     = totalPrompts == 0 ? 0 : Double(totalSkips) / Double(totalPrompts)
 
         let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
 
         // Longest streak
         let days = Set(answered.map { cal.startOfDay(for: $0.date) }).sorted()
@@ -136,7 +165,34 @@ struct ReflectStats {
         }
         longestStreak = best
 
-        // Most active day
+        // Current (active) streak
+        let daysSorted = days.sorted(by: >)
+        var cur = 0
+        for (i, day) in daysSorted.enumerated() {
+            if i == 0 {
+                guard day == today || cal.dateComponents([.day], from: day, to: today).day == 1 else { break }
+                cur = 1
+            } else {
+                guard cal.dateComponents([.day], from: day, to: daysSorted[i-1]).day == 1 else { break }
+                cur += 1
+            }
+        }
+        currentStreak = cur
+
+        // Consistency: denominator is days since first entry, capped at 30
+        let activeDays = Set(answered.map { cal.startOfDay(for: $0.date) })
+        if let firstDay = activeDays.min() {
+            let daysSinceFirst = max(1, cal.dateComponents([.day], from: firstDay, to: today).day! + 1)
+            let window = min(daysSinceFirst, 30)
+            let windowDays = (0..<window).compactMap { cal.date(byAdding: .day, value: -$0, to: today) }
+            consistencyLast30 = Double(windowDays.filter { activeDays.contains($0) }.count) / Double(window)
+            consistencyWindowDays = window
+        } else {
+            consistencyLast30 = 0
+            consistencyWindowDays = 0
+        }
+
+        // Most active day of week
         let weekdays = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
         var dayCounts = Array(repeating: 0, count: 7)
         answered.forEach { dayCounts[cal.component(.weekday, from: $0.date) - 1] += 1 }
@@ -146,19 +202,24 @@ struct ReflectStats {
             mostActiveDay = nil
         }
 
-        // Most active hour
+        // Hour distribution (all-time)
         var hourCounts = Array(repeating: 0, count: 24)
         answered.forEach { hourCounts[cal.component(.hour, from: $0.date)] += 1 }
+        hourDistribution = hourCounts
         if let max = hourCounts.max(), max > 0 {
             mostActiveHour = hourCounts.firstIndex(of: max)
         } else {
             mostActiveHour = nil
         }
 
-        // Top category
+        // Category breakdown
         var catCounts: [String: Int] = [:]
         answered.compactMap { $0.category }.forEach { catCounts[$0, default: 0] += 1 }
         topCategory = catCounts.max(by: { $0.value < $1.value })?.key
+        let total = catCounts.values.reduce(0, +)
+        categoryBreakdown = catCounts
+            .sorted { $0.value > $1.value }
+            .map { k, v in (key: k, label: Category(rawValue: k)?.label ?? k, count: v, pct: total > 0 ? Double(v) / Double(total) : 0) }
     }
 }
 
@@ -294,6 +355,132 @@ struct EntryChartView: View {
                 .fill(RColor.card(scheme))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(RColor.border(scheme), lineWidth: 1))
         )
+    }
+}
+
+// MARK: - Category Breakdown
+
+private func categoryColor(_ key: String) -> Color {
+    switch key {
+    case "gratitude":  return .rOrange
+    case "compassion": return Color(hex: "#5edb97")
+    case "values":     return Color(hex: "#b088ff")
+    case "emotions":   return Color(hex: "#60d4e8")
+    case "grounding":  return Color(hex: "#ffc840")
+    default:           return .rMint
+    }
+}
+
+struct CategoryBreakdownView: View {
+    let breakdown: [(key: String, label: String, count: Int, pct: Double)]
+    @Environment(\.colorScheme) var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("by category")
+                .font(RFont.body(13).weight(.semibold))
+                .foregroundColor(RColor.text(scheme))
+
+            VStack(spacing: 10) {
+                ForEach(breakdown, id: \.key) { item in
+                    HStack(spacing: 10) {
+                        Text(item.label)
+                            .font(RFont.mono(9))
+                            .foregroundColor(RColor.muted(scheme))
+                            .frame(width: 150, alignment: .leading)
+
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(RColor.border(scheme).opacity(0.5))
+                                    .frame(height: 6)
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(categoryColor(item.key))
+                                    .frame(width: geo.size.width * item.pct, height: 6)
+                            }
+                        }
+                        .frame(height: 6)
+
+                        Text("\(Int(item.pct * 100))%")
+                            .font(RFont.mono(9))
+                            .foregroundColor(RColor.muted(scheme))
+                            .frame(width: 30, alignment: .trailing)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(RColor.card(scheme))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(RColor.border(scheme), lineWidth: 1))
+        )
+    }
+}
+
+// MARK: - Hour Pattern Chart
+
+struct HourPatternView: View {
+    let distribution: [Int]
+    @Environment(\.colorScheme) var scheme
+
+    private var maxCount: Int { distribution.max() ?? 1 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("when you write")
+                .font(RFont.body(13).weight(.semibold))
+                .foregroundColor(RColor.text(scheme))
+
+            let chartH: CGFloat = 60
+            GeometryReader { geo in
+                let barW = geo.size.width / 24
+                ZStack(alignment: .bottomLeading) {
+                    ForEach(0..<24, id: \.self) { h in
+                        let count = distribution[h]
+                        let barH = maxCount > 0 ? (CGFloat(count) / CGFloat(maxCount)) * chartH : 0
+                        let color = categoryColor(dominantCategory(at: h))
+
+                        VStack(spacing: 3) {
+                            Spacer()
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(count > 0 ? color.opacity(0.75) : RColor.border(scheme).opacity(0.25))
+                                .frame(width: max(2, barW - 2), height: max(2, barH))
+                            Text(h % 6 == 0 ? hourShort(h) : "")
+                                .font(RFont.mono(7))
+                                .foregroundColor(RColor.muted(scheme))
+                                .frame(width: barW)
+                        }
+                        .frame(width: barW, height: chartH + 14, alignment: .bottom)
+                        .offset(x: CGFloat(h) * barW)
+                    }
+                }
+            }
+            .frame(height: 78)
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(RColor.card(scheme))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(RColor.border(scheme), lineWidth: 1))
+        )
+    }
+
+    private func hourShort(_ h: Int) -> String {
+        if h == 0  { return "12a" }
+        if h == 12 { return "12p" }
+        return h < 12 ? "\(h)a" : "\(h-12)p"
+    }
+
+    // Color bars by the time-of-day they fall in
+    private func dominantCategory(at h: Int) -> String {
+        switch h {
+        case 5..<9:   return "grounding"   // morning  → yellow
+        case 9..<13:  return "values"      // midday   → purple
+        case 13..<18: return "emotions"    // afternoon → cyan
+        case 18..<22: return "gratitude"   // evening  → orange
+        default:      return "compassion"  // night    → green
+        }
     }
 }
 
