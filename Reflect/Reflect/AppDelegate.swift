@@ -34,6 +34,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     private var setupWindow:       HideOnCloseWindow?
     private var onboardingWindow:  HideOnCloseWindow?
 
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         UNUserNotificationCenter.current().delegate = self
@@ -76,11 +78,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     }
 
     private func tickActiveTime() {
-        // Seconds since last keyboard/mouse event (any input type)
-        let idleTime = CGEventSource.secondsSinceLastEventType(
-            .combinedSessionState,
-            eventType: CGEventType(rawValue: UInt32(~0))!
-        )
+        let mouse    = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .mouseMoved)
+        let click    = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown)
+        let keyDown  = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown)
+        let idleTime = min(mouse, min(click, keyDown))
         if idleTime < idleThreshold {
             activeSeconds += 60
         }
