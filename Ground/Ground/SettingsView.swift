@@ -1,5 +1,6 @@
 import SwiftUI
 import Auth
+import Supabase
 
 struct SettingsView: View {
     @EnvironmentObject var supabase: SupabaseManager
@@ -7,12 +8,13 @@ struct SettingsView: View {
 
     @AppStorage("groundPopupIntervalMinutes") private var intervalMinutes: Double = 100
 
-    @State private var currentPassword = ""
+    @State private var quoteStartTime = Date()
     @State private var newPassword = ""
     @State private var confirmPassword = ""
     @State private var statusMessage: String?
     @State private var isError = false
     @State private var isSaving = false
+    @State private var isProfileLoading = true
 
     private func formatInterval(_ minutes: Double) -> String {
         let m = Int(minutes)
@@ -31,6 +33,36 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
+
+                // Daily Grounding Setting
+                SettingsSection(title: "daily grounding") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("start each day at")
+                                .font(RFont.body(13))
+                                .foregroundColor(RColor.muted(scheme))
+                            Spacer()
+                            if isProfileLoading {
+                                ProgressView().scaleEffect(0.5)
+                            } else {
+                                DatePicker("", selection: $quoteStartTime, displayedComponents: .hourAndMinute)
+                                    .labelsHidden()
+                                    .datePickerStyle(.stepperField)
+                                    .onChange(of: quoteStartTime) { _, newValue in
+                                        Task { await handleUpdateStartTime(newValue) }
+                                    }
+                            }
+                        }
+                        Text("This controls when your daily quote resets and the grounding modal appears.")
+                            .font(RFont.body(11))
+                            .foregroundColor(RColor.muted(scheme).opacity(0.8))
+                    }
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12).fill(RColor.card(scheme))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(RColor.border(scheme), lineWidth: 1))
+                    )
+                }
 
                 // Check-in frequency
                 SettingsSection(title: "check-in frequency") {
@@ -156,6 +188,39 @@ struct SettingsView: View {
             }
             .padding(32)
         }
+        .task {
+            await loadProfile()
+        }
+    }
+
+    private func loadProfile() async {
+        guard let profile = await supabase.fetchProfile() else {
+            isProfileLoading = false
+            return
+        }
+        
+        let timeString = profile.quote_start_time ?? "06:00:00"
+        let components = timeString.components(separatedBy: ":")
+        let hours = Int(components[0]) ?? 6
+        let minutes = components.count > 1 ? Int(components[1]) ?? 0 : 0
+        
+        let calendar = Calendar.current
+        var date = calendar.startOfDay(for: Date())
+        date = calendar.date(bySettingHour: hours, minute: minutes, second: 0, of: date) ?? date
+        
+        await MainActor.run {
+            self.quoteStartTime = date
+            self.isProfileLoading = false
+        }
+    }
+
+    private func handleUpdateStartTime(_ newDate: Date) async {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+        let hours = components.hour ?? 6
+        let minutes = components.minute ?? 0
+        let timeString = String(format: "%02d:%02d:00", hours, minutes)
+        
+        try? await supabase.updateProfile(startTime: timeString)
     }
 
     private func handleChangePassword() async {

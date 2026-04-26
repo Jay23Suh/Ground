@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback } from 'react'
 import { supabase, supabaseConfigError } from './supabase'
 import Abstract from './Wrapped'
 import { ReactComponent as LegoIcon } from './lego.svg'
+import { QuoteService } from './services/QuoteService'
+import QuoteModal from './components/QuoteModal'
+import QuoteBanner from './components/QuoteBanner'
 
 const QUESTIONS = {
   gratitude: [
@@ -347,7 +350,22 @@ export default function Home({ session }) {
   const [showAbstract, setShowAbstract] = useState(false)
   const [errorMessage, setErrorMessage] = useState(supabaseConfigError || '')
 
+  // Quote & Settings State
+  const [quote, setQuote] = useState(null)
+  const [showQuoteModal, setShowQuoteModal] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [profile, setProfile] = useState(null)
+  const [quoteStartTime, setQuoteStartTime] = useState('06:00')
+
   const userId = session.user.id
+
+  const fetchQuote = useCallback(async (currentProfile) => {
+    const dailyQuote = await QuoteService.getQuoteOfTheDay()
+    setQuote(dailyQuote)
+    if (QuoteService.shouldShowModal(currentProfile)) {
+      setShowQuoteModal(true)
+    }
+  }, [])
 
   const fetchEntries = useCallback(async () => {
     if (!supabase) {
@@ -369,6 +387,26 @@ export default function Home({ session }) {
       computeStats(data)
     }
   }, [userId])
+
+  const fetchProfileAndQuote = useCallback(async () => {
+    if (!supabase) return
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle()
+    
+    if (error) {
+      setErrorMessage(error.message)
+      return
+    }
+    
+    if (data) {
+      setProfile(data)
+      setQuoteStartTime((data.quote_start_time || '06:00:00').slice(0, 5))
+    }
+    fetchQuote(data)
+  }, [userId, fetchQuote])
 
   const fetchActivityTracker = useCallback(async () => {
     if (!supabase) {
@@ -412,7 +450,8 @@ export default function Home({ session }) {
   useEffect(() => {
     fetchEntries()
     fetchActivityTracker()
-  }, [fetchEntries, fetchActivityTracker])
+    fetchProfileAndQuote()
+  }, [fetchEntries, fetchActivityTracker, fetchProfileAndQuote])
 
   // Request notification permission once on load
   useEffect(() => {
@@ -460,6 +499,29 @@ export default function Home({ session }) {
     setAnswer('')
     setShowPopup(true)
   }
+
+  const handleDismissQuote = async () => {
+    try {
+      await QuoteService.markQuoteAsShown(userId);
+      setShowQuoteModal(false);
+    } catch (error) {
+      setErrorMessage(error.message);
+    }
+  };
+
+  const handleUpdateProfile = async (updates) => {
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', userId);
+      
+      if (error) throw error;
+      fetchProfileAndQuote();
+    } catch (error) {
+      setErrorMessage(error.message);
+    }
+  };
 
   function computeStats(data) {
     const answered = data.filter(e => !e.skipped && e.answer?.trim())
@@ -605,6 +667,54 @@ export default function Home({ session }) {
   return (
     <div className="app">
       {showAbstract && <Abstract session={session} onClose={() => setShowAbstract(false)} />}
+      
+      {/* Quote Modal */}
+      {showQuoteModal && <QuoteModal quote={quote} onDismiss={handleDismissQuote} />}
+
+      {/* Settings Sidebar Overlay */}
+      {showSettings && (
+        <div className="settings-overlay" onClick={() => setShowSettings(false)}>
+          <div className="settings-panel" onClick={e => e.stopPropagation()}>
+            <div className="settings-header">
+              <h2>settings</h2>
+              <button className="btn-close" onClick={() => setShowSettings(false)}>×</button>
+            </div>
+
+            <div className="settings-group">
+              <label className="settings-label">daily grounding</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span className="settings-help" style={{ flex: 1 }}>start each day at</span>
+                <input 
+                  type="time" 
+                  className="settings-control"
+                  value={quoteStartTime}
+                  onChange={e => {
+                    setQuoteStartTime(e.target.value);
+                    handleUpdateProfile({ quote_start_time: e.target.value + ':00' });
+                  }}
+                />
+              </div>
+              <p className="settings-help">
+                This controls when your daily quote resets and the grounding modal appears.
+              </p>
+            </div>
+
+            <div className="settings-group">
+              <label className="settings-label">account</label>
+              <div className="settings-control" style={{ opacity: 0.7, borderStyle: 'dashed' }}>
+                {session.user.email}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 'auto' }}>
+              <button className="nav-link signout" style={{ width: '100%', padding: '12px', border: '1px solid var(--card-border)' }} onClick={handleSignOut}>
+                sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Popup */}
       {showPopup && (
         <div className="popup-overlay">
@@ -636,13 +746,18 @@ export default function Home({ session }) {
           <button className={view === 'history' ? 'nav-link active' : 'nav-link'} onClick={() => setView('history')}>entries</button>
           <button className={view === 'stats' ? 'nav-link active' : 'nav-link'} onClick={() => setView('stats')}>stats</button>
           <button className="nav-link abstract-btn" onClick={() => setShowAbstract(true)}>✦ abstract</button>
-          <button className="nav-link signout" onClick={handleSignOut}>sign out</button>
+          <button className="nav-link settings-btn" onClick={() => setShowSettings(true)}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          </button>
         </div>
       </nav>
 
       {/* Home */}
       {view === 'home' && (
         <div className="page">
+          {/* Quote Banner */}
+          <QuoteBanner quote={quote} />
+
           <div className="home-hero">
             <h1 className="home-title">hello, {session.user.user_metadata?.name || session.user.email}</h1>
             <p className="home-sub">

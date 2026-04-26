@@ -4,17 +4,19 @@ struct MenuBarView: View {
     @EnvironmentObject var supabase: SupabaseManager
 
     var body: some View {
-        if supabase.user == nil {
-            Button("set up ground…") { notify("showSetupWindow") }
-        } else {
-            Button("ground now")   { notify("showJournalPopup") }
-            Button("open ground")  { notify("showMainWindow") }
-            Divider()
-Button("sign out") {
-                Task { try? await supabase.signOut() }
+        Group {
+            if supabase.user == nil {
+                Button("set up ground…") { notify("showSetupWindow") }
+            } else {
+                Button("ground now")   { notify("showJournalPopup") }
+                Button("open ground")  { notify("showMainWindow") }
+                Divider()
+                Button("sign out") {
+                    Task { try? await supabase.signOut() }
+                }
+                Divider()
+                Button("quit ground") { NSApp.terminate(nil) }
             }
-            Divider()
-            Button("quit ground") { NSApp.terminate(nil) }
         }
     }
 

@@ -191,4 +191,42 @@ class SupabaseManager: ObservableObject {
             )
             .execute()
     }
+
+    func fetchProfile() async -> Profile? {
+        guard let uid = user?.id else { return nil }
+        do {
+            let profile: Profile = try await client
+                .from("profiles")
+                .select()
+                .eq("id", value: uid.uuidString)
+                .single()
+                .execute()
+                .value
+            return profile
+        } catch {
+            print("Error fetching profile: \(error)")
+            return nil
+        }
+    }
+
+    func updateLastQuoteShown() async {
+        guard let uid = user?.id else { return }
+        let now = ISO8601DateFormatter().string(from: Date())
+        do {
+            try await client.from("profiles")
+                .update(["last_quote_shown_at": now])
+                .eq("id", value: uid.uuidString)
+                .execute()
+        } catch {
+            print("Error updating last quote shown: \(error)")
+        }
+    }
+
+    func updateProfile(startTime: String) async throws {
+        guard let uid = user?.id else { return }
+        try await client.from("profiles")
+            .update(["quote_start_time": startTime])
+            .eq("id", value: uid.uuidString)
+            .execute()
+    }
 }
