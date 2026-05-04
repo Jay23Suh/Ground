@@ -66,7 +66,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         nc.addObserver(forName: .didJournal,      object: nil, queue: .main) { [weak self] _ in self?.activeSeconds = 0 }
 
         showOnboarding()
-        scheduleDailyQuoteNotification()
+        checkDailyQuote()
     }
 
     // MARK: - UNUserNotificationCenterDelegate
@@ -106,27 +106,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
             showPopup()
             fireJournalNotification()
         }
+        checkDailyQuote()
     }
 
-    func scheduleDailyQuoteNotification() {
+    func checkDailyQuote() {
+        let quoteService = QuoteService.shared
+        guard quoteService.shouldShowToday() else { return }
+
         let timeString = UserDefaults.standard.string(forKey: "groundQuoteStartTime") ?? "08:00"
         let parts = timeString.components(separatedBy: ":")
-        let hour = Int(parts[0]) ?? 8
-        let minute = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
+        let configuredHour = Int(parts[0]) ?? 8
+        let configuredMinute = parts.count > 1 ? Int(parts[1]) ?? 0 : 0
 
+        let cal = Calendar.current
+        let now = Date()
+        let currentMinutes = cal.component(.hour, from: now) * 60 + cal.component(.minute, from: now)
+        let configuredMinutes = configuredHour * 60 + configuredMinute
+        guard currentMinutes >= configuredMinutes else { return }
+
+        quoteService.markShownToday()
         Task {
-            let quote = await QuoteService.shared.getQuoteOfTheDay()
+            let quote = await quoteService.getQuoteOfTheDay()
             UNUserNotificationCenter.current().getNotificationSettings { settings in
                 guard settings.authorizationStatus == .authorized else { return }
                 let content = UNMutableNotificationContent()
                 content.title = "a moment to ground ✦"
                 content.body = "\"\(quote.q)\" — \(quote.a)"
-                var dateComponents = DateComponents()
-                dateComponents.hour = hour
-                dateComponents.minute = minute
-                let trigger = UNCalendarNotificationTrigger(dateMatching: dateComponents, repeats: true)
-                let request = UNNotificationRequest(identifier: "daily-quote", content: content, trigger: trigger)
-                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["daily-quote"])
+                let request = UNNotificationRequest(identifier: "daily-quote", content: content, trigger: nil)
                 UNUserNotificationCenter.current().add(request)
             }
         }

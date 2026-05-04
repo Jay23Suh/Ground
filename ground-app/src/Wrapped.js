@@ -374,6 +374,8 @@ export default function Wrapped({ session, onClose }) {
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 200, cursor: 'pointer' }} onClick={advance}>
       {slides.map((def, i) => {
+        // Only render current + immediate neighbors to avoid mass re-renders and simultaneous transitions
+        if (Math.abs(i - current) > 1) return null
         const visible = i === current
         switch (def.type) {
           case 'title':   return <TitleSlide key={i} visible={visible} />

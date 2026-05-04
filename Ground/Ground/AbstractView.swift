@@ -24,17 +24,17 @@ struct AbstractView: View {
     var onClose: (() -> Void)? = nil
     @State private var current = 0
     @State private var sentimentScores: [UUID: Double] = [:]
-
-    private var stats: GroundStats { GroundStats(entries: entries, sentimentScores: sentimentScores) }
-    private var slides: [AbstractSlide] { buildSlides() }
+    @State private var slides: [AbstractSlide] = []
 
     var body: some View {
         ZStack {
-            Color(hex: "#110d07").ignoresSafeArea()
+            Color(hex: "#1c1610").ignoresSafeArea()
 
-            // Slide content — tap to advance
+            // Only render current + immediate neighbors to avoid simultaneous transitions
             ForEach(Array(slides.enumerated()), id: \.offset) { i, slide in
-                AbstractSlideView(slide: slide, visible: current == i)
+                if abs(i - current) <= 1 {
+                    AbstractSlideView(slide: slide, visible: current == i)
+                }
             }
             .contentShape(Rectangle())
             .onTapGesture { advance() }
@@ -62,7 +62,7 @@ struct AbstractView: View {
             HStack {
                 Button {
                     if current > 0 {
-                        withAnimation(.easeInOut(duration: 0.55)) { current -= 1 }
+                        withAnimation(.easeInOut(duration: 0.47)) { current -= 1 }
                     }
                 } label: {
                     Image(systemName: "chevron.left")
@@ -98,7 +98,7 @@ struct AbstractView: View {
                 HStack(spacing: 6) {
                     ForEach(0..<slides.count, id: \.self) { i in
                         Button {
-                            withAnimation(.easeInOut(duration: 0.55)) { current = i }
+                            withAnimation(.easeInOut(duration: 0.47)) { current = i }
                         } label: {
                             Capsule()
                                 .fill(i == current ? Color(hex: "#f0c060") : Color.white.opacity(0.2))
@@ -113,16 +113,19 @@ struct AbstractView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: entries.map(\.id).hashValue) {
-            sentimentScores = await Entry.computeSentiment(for: entries)
+            let scores = await Entry.computeSentiment(for: entries)
+            sentimentScores = scores
+            let stats = GroundStats(entries: entries, sentimentScores: scores)
+            slides = buildSlides(stats: stats, sentimentScores: scores)
         }
         .onKeyPress(.space)      { advance(); return .handled }
         .onKeyPress(.rightArrow) { advance(); return .handled }
-        .onKeyPress(.leftArrow)  { if current > 0 { withAnimation(.easeInOut(duration: 0.55)) { current -= 1 } }; return .handled }
+        .onKeyPress(.leftArrow)  { if current > 0 { withAnimation(.easeInOut(duration: 0.47)) { current -= 1 } }; return .handled }
     }
 
     private func advance() {
         if current < slides.count - 1 {
-            withAnimation(.easeInOut(duration: 0.55)) { current += 1 }
+            withAnimation(.easeInOut(duration: 0.47)) { current += 1 }
         }
     }
 
@@ -151,101 +154,111 @@ struct AbstractView: View {
         "community":  "you were reaching out.",
     ]
 
-    private func buildSlides() -> [AbstractSlide] {
+    private func buildSlides(stats: GroundStats, sentimentScores: [UUID: Double] = [:]) -> [AbstractSlide] {
         var s: [AbstractSlide] = [.init(type: .title)]
 
+        // 1. Entries
         s.append(.init(type: .count(
-            bg: Color(hex: "#1e0e05"), accent: Color(hex: "#ff8c42"),
+            bg: Color(hex: "#271610"), accent: Color(hex: "#ff8c42"),
             value: stats.totalEntries, label: "entries",
             context: stats.totalEntries == 1 ? "you showed up." : "you kept showing up."
         )))
 
+        // 2. Words
         s.append(.init(type: .count(
-            bg: Color(hex: "#071a0f"), accent: Color(hex: "#5edb97"),
+            bg: Color(hex: "#0f2418"), accent: Color(hex: "#5edb97"),
             value: stats.totalWords, label: "words written",
             context: "every one of them mattered."
         )))
 
-        if stats.avgWords > 0 {
-            s.append(.init(type: .count(
-                bg: Color(hex: "#0f0a1e"), accent: Color(hex: "#b088ff"),
-                value: stats.avgWords, label: "words on average",
-                context: "per entry — just enough to be honest."
-            )))
-        }
-
-        if let day = stats.mostActiveDay {
-            let sub = stats.mostActiveHour.map { "usually around \(formatHour($0))" }
-                ?? "whenever the moment felt right."
-            s.append(.init(type: .text(
-                bg: Color(hex: "#071618"), accent: Color(hex: "#60d4e8"),
-                headline: "you wrote most on \(day)s",
-                subtext: sub
-            )))
-        }
-
+        // 3. Streak
         if stats.longestStreak > 1 {
             s.append(.init(type: .count(
-                bg: Color(hex: "#181205"), accent: Color(hex: "#ffc840"),
+                bg: Color(hex: "#22190a"), accent: Color(hex: "#ffc840"),
                 value: stats.longestStreak, label: "day streak",
                 context: "consistency is a form of care."
             )))
         }
 
+        // 4. Top category
         if let cat = stats.topCategory {
             s.append(.init(type: .text(
-                bg: Color(hex: "#0d0a1a"), accent: Color(hex: "#C39BD3"),
+                bg: Color(hex: "#171322"), accent: Color(hex: "#C39BD3"),
                 headline: categoryLabels[cat] ?? cat,
                 subtext: categorySubtexts[cat] ?? "the theme you kept coming back to."
             )))
         }
 
-        if stats.totalSkips > 0 {
-            let msg = stats.skipRate >= 0.5
-                ? "it's okay — but make some time for yourself to ground."
-                : "you showed up most of the time. that matters."
+        // 5. Most active day/time
+        if let day = stats.mostActiveDay {
+            let sub = stats.mostActiveHour.map { "usually around \(formatHour($0))" }
+                ?? "whenever the moment felt right."
             s.append(.init(type: .text(
-                bg: Color(hex: "#100a18"), accent: Color(hex: "#FFA6C9"),
-                headline: "\(stats.totalSkips) skipped",
-                subtext: msg
+                bg: Color(hex: "#101f22"), accent: Color(hex: "#60d4e8"),
+                headline: "you wrote most on \(day)s",
+                subtext: sub
             )))
         }
 
-        // Most used word + word cloud
+        // 6. Word cloud
         let topWords = computeTopWords()
-        if let topWord = topWords.first {
-            s.append(.init(type: .text(
-                bg: Color(hex: "#0a0510"),
-                accent: Color(hex: "#C39BD3"),
-                headline: topWord,
-                subtext: "your most used word"
-            )))
-        }
         if topWords.count >= 3 {
             s.append(.init(type: .wordCloud(
-                bg: Color(hex: "#08080f"),
-                words: topWords.prefix(7).enumerated().map { (word: $0.element, rank: $0.offset) }
+                bg: Color(hex: "#121218"),
+                words: topWords.prefix(12).enumerated().map { (word: $0.element, rank: $0.offset) }
             )))
         }
 
-        // Mood (only after baseline + post-baseline data exists)
-        if let avg = stats.avgMoodDelta {
-            s.append(.init(type: .mood(score: avg, trend: stats.moodTrendDirection)))
-        }
-
-        // Pull quote from longest entry
-        if let longest = entries.filter({ !$0.skipped }).max(by: { $0.wordCount < $1.wordCount }),
+        // 7. Pull quote — longest entry
+        let answered = entries.filter { !$0.skipped }
+        if let longest = answered.max(by: { $0.wordCount < $1.wordCount }),
            longest.wordCount > 10,
            let quote = extractFirstSentence(longest.answer ?? "") {
             s.append(.init(type: .quote(
-                bg: Color(hex: "#050d12"),
+                bg: Color(hex: "#0e161c"),
                 accent: Color(hex: "#60d4e8"),
                 quote: quote,
                 context: "from your longest entry"
             )))
         }
 
-        s.append(.init(type: .closing(message: closingMessage())))
+        // 8. Pull quote — highest sentiment entry (if different from longest)
+        let longestId = answered.max(by: { $0.wordCount < $1.wordCount })?.id
+        if let highestEntry = answered
+            .compactMap({ e -> (Entry, Double)? in
+                guard let score = sentimentScores[e.id] else { return nil }
+                return (e, score)
+            })
+            .max(by: { $0.1 < $1.1 })?.0,
+           highestEntry.id != longestId,
+           let quote = extractFirstSentence(highestEntry.answer ?? "") {
+            s.append(.init(type: .quote(
+                bg: Color(hex: "#0e1411"),
+                accent: Color(hex: "#5edb97"),
+                quote: quote,
+                context: "from your most uplifting entry"
+            )))
+        }
+
+        // 9. Mood
+        if let avg = stats.avgMoodDelta {
+            s.append(.init(type: .mood(score: avg, trend: stats.moodTrendDirection)))
+        }
+
+        // 10. Skips — near the end, gentle
+        if stats.totalSkips > 0 {
+            let msg = stats.skipRate >= 0.5
+                ? "it's okay — but make some time for yourself to ground."
+                : "you showed up most of the time. that matters."
+            s.append(.init(type: .text(
+                bg: Color(hex: "#1a1222"), accent: Color(hex: "#FFA6C9"),
+                headline: "\(stats.totalSkips) skipped",
+                subtext: msg
+            )))
+        }
+
+        // 11. Closing
+        s.append(.init(type: .closing(message: closingMessage(stats: stats))))
         return s
     }
 
@@ -262,49 +275,119 @@ struct AbstractView: View {
 
     private func computeTopWords() -> [String] {
         let stopWords: Set<String> = [
-            "i","me","my","we","our","you","your","he","him","his","she","her","it","its",
-            "they","them","their","what","which","who","this","that","these","those",
-            "am","is","are","was","were","be","been","being","have","has","had","do","does",
-            "did","a","an","the","and","but","if","or","as","of","at","by","for","with",
-            "about","into","through","before","after","to","from","up","down","in","out",
-            "on","off","so","than","just","not","no","nor","all","both","more","most",
-            "other","some","when","where","how","will","can","could","would","should",
-            "now","then","here","there","very","also","too","only","even","still",
-            "really","like","feel","felt","get","got","think","know","want","need",
-            "make","made","today","one","two","time","day","days","thing","things","little",
-            "lot","much","many","back","well","way","see","going","something","anything",
-            "d","ll","m","re","s","t","ve","didn","don","won","isn","wasn","can't","i'm",
-            "i've","i'd","it's","that's","been","actually","always","never","ever",
+            // pronouns
+            "i","me","my","myself","we","our","ours","ourselves","you","your","yours",
+            "yourself","he","him","his","himself","she","her","hers","herself",
+            "it","its","itself","they","them","their","theirs","themselves",
+            "what","which","who","whom","this","that","these","those",
+            // verbs
+            "am","is","are","was","were","be","been","being",
+            "have","has","had","having","do","does","did","doing",
+            "will","would","could","should","shall","may","might","must",
+            "can","need","dare","used","ought",
+            "get","got","gets","getting","gotten",
+            "feel","felt","feels","feeling",
+            "think","thought","thinks","thinking",
+            "know","knew","knows","knowing",
+            "want","wanted","wants","wanting",
+            "make","made","makes","making",
+            "see","saw","seen","seeing",
+            "come","came","comes","coming",
+            "go","went","gone","going","goes",
+            "take","took","taken","taking",
+            "keep","kept","keeps","keeping",
+            "tell","told","tells","telling",
+            "give","gave","given","gives","giving",
+            "find","found","finds","finding",
+            "help","helped","helps","helping",
+            "work","worked","works","working",
+            "look","looked","looks","looking",
+            "turn","turned","turns","turning",
+            "seem","seemed","seems","seeming",
+            "show","showed","shown","shows","showing",
+            "move","moved","moves","moving",
+            "live","lived","lives","living",
+            "try","tried","tries","trying",
+            "ask","asked","asks","asking",
+            "mean","meant","means","meaning",
+            "let","lets","letting",
+            "put","puts","putting",
+            "say","said","says","saying",
+            "call","called","calls","calling",
+            "become","became","becomes","becoming",
+            "leave","left","leaves","leaving",
+            "start","started","starts","starting",
+            "end","ended","ends","ending",
+            "stop","stopped","stops","stopping",
+            "bring","brought","brings","bringing",
+            "set","sets","setting",
+            "talk","talked","talks","talking",
+            // articles / prepositions / conjunctions
+            "a","an","the","and","but","if","or","nor","as","of","at","by","for",
+            "with","about","into","through","before","after","to","from","up","down",
+            "in","out","on","off","over","under","again","further","once","than",
+            "so","yet","both","either","neither","whether","while","since","until",
+            "because","though","although","unless","however","therefore","thus",
+            "hence","thereby","whereby","whereas","meanwhile","nevertheless",
+            // adverbs / filler
+            "not","no","nor","never","ever","just","only","even","still","really",
+            "very","also","too","quite","rather","almost","already","always","often",
+            "sometimes","usually","mostly","generally","actually","basically","literally",
+            "honestly","probably","maybe","perhaps","anyway","somehow","somewhere",
+            "together","around","every","each","now","then","here","there","when",
+            "where","why","how","more","most","other","some","such","same","own",
+            "another","enough","else","back","well","away","around","across","along",
+            // quantifiers / numbers
+            "all","both","few","many","much","more","most","lot","lots","little","less",
+            "one","two","three","four","five","six","several","any","every","each",
+            // time words
+            "today","yesterday","tomorrow","tonight","morning","evening","night",
+            "week","month","year","day","days","time","times","moment","while",
+            // contractions / fragments
+            "d","ll","m","re","s","t","ve",
+            "didn","don","won","isn","wasn","aren","weren","hasn","haven","hadn",
+            "couldn","wouldn","shouldn","doesn","mustn","mightn","needn","oughtn",
+            // common journaling filler
+            "thing","things","something","anything","everything","nothing","someone",
+            "anyone","everyone","kind","right","good","great","really","just","like",
+            "next","last","long","new","old","big","small","own","sure","true","false",
+            "okay","ok","yeah","yes","bit","lot","way","place","point","part","side",
         ]
         var freq: [String: Int] = [:]
         for entry in entries where !entry.skipped {
             guard let text = entry.answer else { continue }
             let words = text.lowercased()
+                .replacingOccurrences(of: "\u{2019}", with: "'")
+                .replacingOccurrences(of: "\u{2018}", with: "'")
                 .components(separatedBy: .init(charactersIn: " \n\t.,!?;:\"'()-"))
                 .map { $0.trimmingCharacters(in: .punctuationCharacters) }
-                .filter { $0.count > 3 && !stopWords.contains($0) }
+                .filter { $0.count > 4 && !stopWords.contains($0) }
             for word in words { freq[word, default: 0] += 1 }
         }
         return freq.filter { $0.value >= 2 }
             .sorted { $0.value > $1.value }
-            .prefix(8)
+            .prefix(12)
             .map(\.key)
     }
 
-    private func closingMessage() -> String {
+    private func closingMessage(stats: GroundStats) -> String {
+        // Personal data-driven closing — use real numbers
+        if let cat = stats.topCategory {
+            let catWords = entries
+                .filter { !$0.skipped && $0.category == cat }
+                .reduce(0) { $0 + $1.wordCount }
+            let label = (categoryLabels[cat] ?? cat).lowercased()
+            if catWords > 30 {
+                return "you wrote \(catWords) words\nabout \(label) ✦"
+            }
+        }
         if stats.longestStreak >= 7 {
-            return "consistency is\na form of love ✦"
+            return "you showed up\n\(stats.longestStreak) days in a row ✦"
         }
-        switch stats.topCategory {
-        case "gratitude":   return "you already have\nenough ✦"
-        case "compassion":  return "be gentle\nwith yourself ✦"
-        case "values":      return "keep asking what\nmatters ✦"
-        case "emotions":    return "feeling is\nalso healing ✦"
-        case "grounding":   return "the present\nis enough ✦"
-        case "horizon":     return "keep looking\nforward ✦"
-        case "community":   return "you're not\nalone ✦"
-        default:            return "keep showing up\nfor yourself ✦"
+        if stats.totalEntries >= 10 {
+            return "\(stats.totalEntries) entries.\nthat's not nothing ✦"
         }
+        return "keep showing up\nfor yourself ✦"
     }
 }
 
@@ -346,7 +429,7 @@ struct AbstractSlideView: View {
         .overlay(NoiseOverlay())
         .opacity(visible ? 1 : 0)
         .offset(y: visible ? 0 : 32)
-        .animation(.easeInOut(duration: 0.55), value: visible)
+        .animation(.easeInOut(duration: 0.47), value: visible)
         .onChange(of: visible) { _, isVisible in
             if isVisible {
                 appeared = false
@@ -380,7 +463,7 @@ struct TitleSlideView: View {
     let visible: Bool
     let appeared: Bool
     var body: some View {
-        ZStack { Color(hex: "#110d07").ignoresSafeArea()
+        ZStack { Color(hex: "#1c1610").ignoresSafeArea()
             VStack(spacing: 0) {
                 Text("your journey in journaling")
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
@@ -434,7 +517,7 @@ struct CountSlideView: View {
                     .contentTransition(.numericText())
                     .padding(.bottom, 28)
                 Text(context)
-                    .font(RFont.header(18, italic: true))
+                    .font(RFont.header(20, italic: true))
                     .foregroundColor(Color.white.opacity(0.5))
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 40)
@@ -525,7 +608,26 @@ struct ClosingSlideView: View {
     let message: String
 
     var body: some View {
-        ZStack { Color(hex: "#110d07").ignoresSafeArea()
+        ZStack {
+            // Dark base — slightly warmer than other slides
+            Color(hex: "#16110c").ignoresSafeArea()
+
+            // App pastels bleeding in from the corners — signals return to the light
+            RadialGradient(colors: [Color(hex: "#FFA6C9").opacity(0.13), .clear],
+                           center: .topLeading, startRadius: 0, endRadius: 320)
+                .ignoresSafeArea()
+            RadialGradient(colors: [Color(hex: "#76D7C4").opacity(0.10), .clear],
+                           center: .topTrailing, startRadius: 0, endRadius: 300)
+                .ignoresSafeArea()
+            RadialGradient(colors: [Color(hex: "#C39BD3").opacity(0.09), .clear],
+                           center: .bottomTrailing, startRadius: 0, endRadius: 280)
+                .ignoresSafeArea()
+
+            // Central gold glow — the landing moment
+            RadialGradient(colors: [Color(hex: "#f0c060").opacity(0.14), .clear],
+                           center: .center, startRadius: 0, endRadius: 220)
+                .ignoresSafeArea()
+
             VStack(spacing: 0) {
                 Text("until next time")
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
@@ -557,13 +659,18 @@ struct WordCloudSlideView: View {
 
     // Fixed scatter layout: (dx, dy, rotation degrees, size)
     private let layout: [(CGFloat, CGFloat, Double, CGFloat)] = [
-        (  0,   0,   0, 52),   // center — largest
-        (-95, -44,  -4, 32),
-        ( 88, -38,   3, 28),
-        (-75,  52,  -2, 26),
-        ( 80,  56,   5, 24),
-        (  6, -88,  -3, 21),
-        (-28,  88,   2, 19),
+        (   0,    0,   0, 56),   // center — largest
+        (-140,  -60,  -5, 36),
+        ( 140,  -50,   4, 32),
+        (-120,   80,  -3, 28),
+        ( 130,   85,   6, 26),
+        (   8, -130,  -4, 24),
+        ( -50,  140,   3, 22),
+        ( 170,   10,  -2, 20),
+        (-170,   10,   5, 19),
+        (  60, -155,   3, 18),
+        ( -90,  -145, -3, 17),
+        ( 110,  150,  -4, 16),
     ]
 
     var body: some View {
@@ -573,21 +680,21 @@ struct WordCloudSlideView: View {
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
                 .tracking(4).textCase(.uppercase)
                 .foregroundColor(Color.white.opacity(0.15))
-                .offset(y: -140)
+                .offset(y: -200)
                 .opacity(appeared ? 1 : 0)
                 .animation(.easeOut(duration: 0.4).delay(0.05), value: appeared)
 
             ZStack {
-                ForEach(Array(words.prefix(7).enumerated()), id: \.offset) { i, item in
+                ForEach(Array(words.prefix(layout.count).enumerated()), id: \.offset) { i, item in
                     let (dx, dy, rot, size) = layout[i]
-                    let opacity = i == 0 ? 0.92 : max(0.3, 0.75 - Double(i) * 0.08)
+                    let opacity = i == 0 ? 0.92 : max(0.25, 0.78 - Double(i) * 0.06)
                     Text(item.word)
                         .font(RFont.header(size))
                         .foregroundColor(Color.white.opacity(opacity))
                         .rotationEffect(.degrees(rot))
                         .offset(x: dx, y: dy)
                         .opacity(appeared ? 1 : 0)
-                        .animation(.easeOut(duration: 0.45).delay(0.1 + Double(i) * 0.11), value: appeared)
+                        .animation(.easeOut(duration: 0.45).delay(0.1 + Double(i) * 0.09), value: appeared)
                 }
             }
         }
@@ -614,7 +721,7 @@ struct MoodSlideView: View {
     private var moodWord: String {
         if score >= 0.15  { return "brighter" }
         if score >= 0.05  { return "steady" }
-        if score >= -0.05 { return "grounded" }
+        if score >= -0.05 { return "balanced" }
         if score >= -0.15 { return "heavier" }
         return "darker"
     }
@@ -629,7 +736,7 @@ struct MoodSlideView: View {
 
     var body: some View {
         ZStack {
-            Color(hex: "#08100e").ignoresSafeArea()
+            Color(hex: "#111a17").ignoresSafeArea()
             VStack(spacing: 0) {
                 Text("your mood")
                     .font(.system(size: 11, weight: .regular, design: .monospaced))

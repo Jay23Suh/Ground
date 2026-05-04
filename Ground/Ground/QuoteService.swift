@@ -46,6 +46,16 @@ class QuoteService: ObservableObject {
     }
 
 
+    func shouldShowToday() -> Bool {
+        let today = ISO8601DateFormatter().string(from: Date()).components(separatedBy: "T")[0]
+        return UserDefaults.standard.string(forKey: "ground_quote_last_shown") != today
+    }
+
+    func markShownToday() {
+        let today = ISO8601DateFormatter().string(from: Date()).components(separatedBy: "T")[0]
+        UserDefaults.standard.set(today, forKey: "ground_quote_last_shown")
+    }
+
     private func saveToCache(quote: Quote, date: String) {
         if let encoded = try? JSONEncoder().encode(QuoteCache(date: date, quote: quote)) {
             UserDefaults.standard.set(encoded, forKey: cacheKey)

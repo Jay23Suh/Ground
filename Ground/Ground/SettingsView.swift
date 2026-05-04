@@ -222,7 +222,6 @@ struct SettingsView: View {
         let timeString = String(format: "%02d:%02d:00", hours, minutes)
         UserDefaults.standard.set(String(format: "%02d:%02d", hours, minutes), forKey: "groundQuoteStartTime")
         try? await supabase.updateProfile(startTime: timeString)
-        (NSApp.delegate as? AppDelegate)?.scheduleDailyQuoteNotification()
     }
 
     private func handleChangePassword() async {

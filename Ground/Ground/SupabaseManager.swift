@@ -158,6 +158,55 @@ class SupabaseManager: ObservableObject {
         }
     }
 
+    // MARK: - Notes
+
+    func fetchNotes() async throws -> [Note] {
+        guard let uid = user?.id else { return [] }
+        return try await client
+            .from("notes")
+            .select()
+            .eq("user_id", value: uid.uuidString)
+            .order("created_at", ascending: false)
+            .execute()
+            .value
+    }
+
+    func createNote() async throws -> Note {
+        guard let uid = user?.id else { throw SupabaseManagerError.notSignedIn }
+        let now = ISO8601DateFormatter().string(from: Date())
+        let id = UUID()
+        struct InsertNote: Encodable {
+            let id: String; let user_id: String; let content: String
+            let created_at: String; let updated_at: String
+        }
+        try await client
+            .from("notes")
+            .insert(InsertNote(id: id.uuidString, user_id: uid.uuidString, content: "",
+                               created_at: now, updated_at: now))
+            .execute()
+        return Note(id: id, user_id: uid.uuidString, content: "",
+                    year: nil, month: nil, day: nil, created_at: now, updated_at: now)
+    }
+
+    func updateNote(_ note: Note) async throws {
+        struct NoteUpdate: Encodable {
+            let content: String; let year: Int?; let month: Int?; let day: Int?
+            let updated_at: String
+        }
+        try await client
+            .from("notes")
+            .update(NoteUpdate(content: note.content, year: note.year, month: note.month,
+                               day: note.day, updated_at: ISO8601DateFormatter().string(from: Date())))
+            .eq("id", value: note.id.uuidString)
+            .execute()
+    }
+
+    func deleteNote(id: UUID) async throws {
+        try await client.from("notes").delete().eq("id", value: id.uuidString).execute()
+    }
+
+    // MARK: - Entries
+
     func fetchEntries() async throws -> [Entry] {
         guard let uid = user?.id else { return [] }
         do {

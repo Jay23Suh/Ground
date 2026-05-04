@@ -2,7 +2,7 @@ import SwiftUI
 import UserNotifications
 
 enum GroundTab {
-    case home, history, stats, abstract, settings
+    case home, history, notes, stats, abstract, settings
 }
 
 struct MainWindowView: View {
@@ -45,6 +45,7 @@ struct MainWindowView: View {
                     HStack(spacing: 4) {
                         NavTab(label: "home",     selected: tab == .home)     { tab = .home }
                         NavTab(label: "history",  selected: tab == .history)  { tab = .history }
+                        NavTab(label: "memories", selected: tab == .notes)    { tab = .notes }
                         NavTab(label: "stats",    selected: tab == .stats)    { tab = .stats }
                         NavTab(label: "abstract", selected: tab == .abstract) { tab = .abstract }
                         NavTab(label: "settings", selected: tab == .settings) { tab = .settings }
@@ -83,6 +84,9 @@ struct MainWindowView: View {
                             .environmentObject(supabase)
                     case .history:
                         HistoryView(entries: entries)
+                    case .notes:
+                        NotesView()
+                            .environmentObject(supabase)
                     case .stats:
                         StatsView(entries: entries)
                     case .abstract:
