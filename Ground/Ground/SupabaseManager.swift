@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import Supabase
+import NaturalLanguage
 
 enum SupabaseManagerError: LocalizedError {
     case notSignedIn
@@ -191,14 +192,47 @@ class SupabaseManager: ObservableObject {
     func updateNote(_ note: Note) async throws {
         struct NoteUpdate: Encodable {
             let content: String; let year: Int?; let month: Int?; let day: Int?
-            let updated_at: String
+            let place: String?; let updated_at: String
         }
         try await client
             .from("notes")
             .update(NoteUpdate(content: note.content, year: note.year, month: note.month,
-                               day: note.day, updated_at: ISO8601DateFormatter().string(from: Date())))
+                               day: note.day, place: note.place,
+                               updated_at: ISO8601DateFormatter().string(from: Date())))
             .eq("id", value: note.id.uuidString)
             .execute()
+    }
+
+    func backfillPlaces(in notes: [Note]) async {
+        guard let uid = user?.id else { return }
+        let candidates = notes.filter { $0.place == nil && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !candidates.isEmpty else { return }
+
+        struct PlacePatch: Encodable, Sendable { let place: String; let updated_at: String }
+
+        await Task.detached(priority: .utility) {
+            let tagger = NLTagger(tagSchemes: [.nameType])
+            let now = ISO8601DateFormatter().string(from: Date())
+
+            for note in candidates {
+                tagger.string = note.content
+                var detected: String? = nil
+                tagger.enumerateTags(in: note.content.startIndex..<note.content.endIndex,
+                                     unit: .word, scheme: .nameType) { tag, range in
+                    guard tag == .placeName else { return true }
+                    let token = String(note.content[range])
+                    if token.count >= 4 { detected = token.lowercased() }
+                    return detected == nil
+                }
+                guard let place = detected else { continue }
+                try? await self.client
+                    .from("notes")
+                    .update(PlacePatch(place: place, updated_at: now))
+                    .eq("id", value: note.id.uuidString)
+                    .eq("user_id", value: uid.uuidString)
+                    .execute()
+            }
+        }.value
     }
 
     func deleteNote(id: UUID) async throws {

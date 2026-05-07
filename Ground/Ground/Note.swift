@@ -7,6 +7,7 @@ struct Note: Codable, Identifiable {
     var year: Int?
     var month: Int?
     var day: Int?
+    var place: String?
     let created_at: String
     var updated_at: String
 
@@ -28,6 +29,17 @@ struct Note: Codable, Identifiable {
         let name = Calendar.current.shortMonthSymbols[m - 1]
         guard let d = day else { return "\(name) \(y)" }
         return "\(name) \(d), \(y)"
+    }
+
+    var displayMeta: String? {
+        let hasDate = year != nil
+        let p = place
+        switch (hasDate, p) {
+        case (true, let pl?): return "\(displayDate) · \(pl)"
+        case (true, nil):     return displayDate
+        case (false, let pl?): return pl
+        case (false, nil):    return nil
+        }
     }
 
     // Descending sort: most recent year/month/day first; undated last

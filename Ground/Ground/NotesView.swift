@@ -97,6 +97,7 @@ struct NotesView: View {
     @State private var loading = true
     @State private var editingNote: Note? = nil
     @State private var debugError: String = ""
+    @State private var selectedPlace: String? = nil
 
     @State private var visibleYears: Set<String> = []
     @State private var visibleMonthKeys: Set<String> = []
@@ -119,6 +120,15 @@ struct NotesView: View {
 
     private var datedGroups: [YearGroup] {
         groupNotes(notes).filter { $0.id != "undated" }
+    }
+
+    private var places: [String] {
+        Array(Set(notes.compactMap { $0.place })).sorted()
+    }
+
+    private var filteredNotes: [Note] {
+        guard let p = selectedPlace else { return notes }
+        return notes.filter { $0.place == p }
     }
 
     var body: some View {
@@ -167,6 +177,24 @@ struct NotesView: View {
 
             Divider().opacity(0.4)
 
+            if !places.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        FilterPill(label: "all", selected: selectedPlace == nil) {
+                            selectedPlace = nil
+                        }
+                        ForEach(places, id: \.self) { p in
+                            FilterPill(label: p, selected: selectedPlace == p) {
+                                selectedPlace = selectedPlace == p ? nil : p
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 12)
+                }
+                Divider().opacity(0.4)
+            }
+
             if loading {
                 Spacer()
                 ProgressView().progressViewStyle(.circular).frame(maxWidth: .infinity)
@@ -200,7 +228,7 @@ struct NotesView: View {
                     VStack(spacing: 0) {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
-                                ForEach(flatSections(from: groupNotes(notes))) { section in
+                                ForEach(flatSections(from: groupNotes(filteredNotes))) { section in
                                     switch section {
                                     case .yearHeader(let yearGroup):
                                         Text(yearGroup.yearLabel)
@@ -268,6 +296,7 @@ struct NotesView: View {
         loading = true
         notes = (try? await supabase.fetchNotes()) ?? []
         loading = false
+        Task { await supabase.backfillPlaces(in: notes) }
     }
 
     private func newNote() async {
@@ -384,8 +413,8 @@ struct NoteRow: View {
                         .foregroundColor(RColor.text(scheme))
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                    if note.month != nil || note.day != nil {
-                        Text(note.displayDate)
+                    if let meta = note.displayMeta {
+                        Text(meta)
                             .font(RFont.mono(10))
                             .foregroundColor(RColor.muted(scheme))
                     }
@@ -422,7 +451,9 @@ struct NoteEditorView: View {
     @State private var yearText: String
     @State private var month: Int?
     @State private var day: Int?
+    @State private var place: String?
     @State private var showDatePicker = false
+    @State private var showPlacePicker = false
     @State private var saveTask: Task<Void, Never>?
     @FocusState private var editorFocused: Bool
 
@@ -433,6 +464,7 @@ struct NoteEditorView: View {
         _yearText = State(initialValue: note.year.map { "\($0)" } ?? "")
         _month    = State(initialValue: note.month)
         _day      = State(initialValue: note.day)
+        _place    = State(initialValue: note.place)
     }
 
     var body: some View {
@@ -467,6 +499,23 @@ struct NoteEditorView: View {
                 .buttonStyle(.plain)
                 .popover(isPresented: $showDatePicker, arrowEdge: .bottom) {
                     DatePickerPopover(yearText: $yearText, month: $month, day: $day) {
+                        scheduleAutoSave()
+                    }
+                }
+
+                Button { showPlacePicker.toggle() } label: {
+                    Text(place ?? "set place")
+                        .font(RFont.mono(10))
+                        .foregroundColor(place != nil ? .rMint : RColor.muted(scheme))
+                        .tracking(1)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(RColor.card(scheme))
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(RColor.border(scheme), lineWidth: 1)))
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showPlacePicker, arrowEdge: .bottom) {
+                    PlacePickerPopover(place: $place) {
                         scheduleAutoSave()
                     }
                 }
@@ -521,6 +570,7 @@ struct NoteEditorView: View {
         updated.year = Int(yearText)
         updated.month = month
         updated.day = day
+        updated.place = place?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().nilIfEmpty
         try? await supabase.updateNote(updated)
         return updated
     }
@@ -630,4 +680,93 @@ private struct DatePickerPopover: View {
         return Calendar.current.range(of: .day, in: .month,
             for: Calendar.current.date(from: c) ?? Date())?.count ?? 31
     }
+}
+
+// MARK: - PlacePickerPopover
+
+private struct PlacePickerPopover: View {
+    @Binding var place: String?
+    let onChange: () -> Void
+    @Environment(\.colorScheme) var scheme
+    @State private var text: String = ""
+
+    private let recentKey = "ground.recentPlaces"
+
+    private var recentPlaces: [String] {
+        (UserDefaults.standard.array(forKey: recentKey) as? [String]) ?? []
+    }
+
+    init(place: Binding<String?>, onChange: @escaping () -> Void) {
+        _place = place
+        self.onChange = onChange
+        _text = State(initialValue: place.wrappedValue ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("place")
+                .font(RFont.mono(10))
+                .foregroundColor(RColor.muted(scheme))
+                .tracking(3)
+                .textCase(.uppercase)
+
+            HStack {
+                TextField("e.g. home, café, park", text: $text)
+                    .textFieldStyle(.plain)
+                    .font(RFont.body(13))
+                    .foregroundColor(RColor.text(scheme))
+                    .onSubmit { commit() }
+                if !text.isEmpty {
+                    Button("×") { text = ""; place = nil; onChange() }
+                        .buttonStyle(.plain)
+                        .foregroundColor(RColor.muted(scheme))
+                }
+            }
+
+            if !recentPlaces.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(recentPlaces, id: \.self) { p in
+                            Button(p) {
+                                text = p
+                                commit()
+                            }
+                            .buttonStyle(.plain)
+                            .font(RFont.mono(10))
+                            .foregroundColor(place == p ? .white : RColor.text(scheme))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(place == p ? Color.rMint : RColor.input(scheme)))
+                            .overlay(Capsule().stroke(RColor.border(scheme), lineWidth: place == p ? 0 : 1))
+                        }
+                    }
+                }
+            }
+
+            if place != nil {
+                Button("clear") { text = ""; place = nil; onChange() }
+                    .buttonStyle(.plain)
+                    .font(RFont.body(12))
+                    .foregroundColor(.rOrange)
+            }
+        }
+        .padding(20)
+        .frame(width: 260)
+    }
+
+    private func commit() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { place = nil; onChange(); return }
+        place = trimmed
+        var recent = recentPlaces.filter { $0 != trimmed }
+        recent.insert(trimmed, at: 0)
+        UserDefaults.standard.set(Array(recent.prefix(8)), forKey: recentKey)
+        onChange()
+    }
+}
+
+// MARK: - Helpers
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
