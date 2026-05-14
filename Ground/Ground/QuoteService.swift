@@ -12,15 +12,21 @@ struct Quote: Codable, Identifiable {
 class QuoteService: ObservableObject {
     static let shared = QuoteService()
 
-    private let zenQuotesURL = URL(string: "https://zenquotes.io/api/today")!
+    private let zenQuotesURL = URL(string: "https://zenquotes.io/api/random")!
     private let cacheKey = "ground_quote_cache"
 
     @Published var currentQuote: Quote?
 
     private init() {}
 
+    private func localDateString() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: Date())
+    }
+
     func getQuoteOfTheDay() async -> Quote {
-        let today = ISO8601DateFormatter().string(from: Date()).components(separatedBy: "T")[0]
+        let today = localDateString()
 
         if let cachedData = UserDefaults.standard.data(forKey: cacheKey),
            let cached = try? JSONDecoder().decode(QuoteCache.self, from: cachedData),
@@ -47,13 +53,11 @@ class QuoteService: ObservableObject {
 
 
     func shouldShowToday() -> Bool {
-        let today = ISO8601DateFormatter().string(from: Date()).components(separatedBy: "T")[0]
-        return UserDefaults.standard.string(forKey: "ground_quote_last_shown") != today
+        UserDefaults.standard.string(forKey: "ground_quote_last_shown") != localDateString()
     }
 
     func markShownToday() {
-        let today = ISO8601DateFormatter().string(from: Date()).components(separatedBy: "T")[0]
-        UserDefaults.standard.set(today, forKey: "ground_quote_last_shown")
+        UserDefaults.standard.set(localDateString(), forKey: "ground_quote_last_shown")
     }
 
     private func saveToCache(quote: Quote, date: String) {
