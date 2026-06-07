@@ -76,4 +76,5 @@ struct Profile: Codable {
     let id: UUID
     let quote_start_time: String?
     let last_quote_shown_at: String?
+    let username: String?
 }

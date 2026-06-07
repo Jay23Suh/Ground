@@ -1,4 +1,5 @@
 import SwiftUI
+import Auth
 
 // MARK: - Grouping helpers
 
@@ -100,6 +101,9 @@ struct NotesView: View {
     @State private var selectedPlace: String? = nil
     @State private var searchText = ""
 
+    @State private var collectiveEvents: [CollectiveEvent] = []
+    @State private var showCreateCollective = false
+
     @State private var visibleYears: Set<String> = []
     @State private var visibleMonthKeys: Set<String> = []
     @State private var drillYear: String? = nil
@@ -190,6 +194,22 @@ struct NotesView: View {
                     .font(RFont.header(28))
                     .foregroundColor(RColor.text(scheme))
                 Spacer()
+                Button { showCreateCollective = true } label: {
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.rMint)
+                        .padding(8)
+                        .background(Circle().fill(RColor.card(scheme))
+                            .overlay(Circle().stroke(RColor.border(scheme), lineWidth: 1)))
+                }
+                .buttonStyle(.plain)
+                .sheet(isPresented: $showCreateCollective) {
+                    CreateCollectiveSheet { event in
+                        collectiveEvents.insert(event, at: 0)
+                    }
+                    .environmentObject(supabase)
+                }
+
                 Button { Task { await newNote() } } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 15, weight: .medium))
@@ -224,6 +244,11 @@ struct NotesView: View {
                     .padding(.horizontal, 32)
                     .padding(.vertical, 12)
                 }
+                Divider().opacity(0.4)
+            }
+
+            if !collectiveEvents.isEmpty {
+                collectiveSection
                 Divider().opacity(0.4)
             }
 
@@ -336,9 +361,52 @@ struct NotesView: View {
         }
     }
 
+    private var collectiveSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("shared")
+                .font(RFont.mono(10))
+                .foregroundColor(RColor.muted(scheme))
+                .tracking(3)
+                .textCase(.uppercase)
+                .padding(.horizontal, 32)
+                .padding(.top, 16)
+                .padding(.bottom, 8)
+
+            ForEach(collectiveEvents) { event in
+                HStack(spacing: 12) {
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.rMint)
+                        .frame(width: 20)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(event.title)
+                            .font(RFont.body(14))
+                            .foregroundColor(RColor.text(scheme))
+                        if let date = event.displayDate {
+                            Text(date)
+                                .font(RFont.mono(10))
+                                .foregroundColor(RColor.muted(scheme))
+                        }
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10))
+                        .foregroundColor(RColor.muted(scheme).opacity(0.4))
+                }
+                .padding(.horizontal, 32)
+                .padding(.vertical, 13)
+                .contentShape(Rectangle())
+                .overlay(Divider().opacity(0.2), alignment: .bottom)
+            }
+        }
+    }
+
     private func loadNotes() async {
         loading = true
-        notes = (try? await supabase.fetchNotes()) ?? []
+        async let notesFetch = supabase.fetchNotes()
+        async let collectiveFetch = supabase.fetchCollectiveEvents()
+        notes = (try? await notesFetch) ?? []
+        collectiveEvents = (try? await collectiveFetch) ?? []
         loading = false
         Task { await supabase.backfillPlaces(in: notes) }
     }
@@ -806,6 +874,183 @@ private struct PlacePickerPopover: View {
         recent.insert(trimmed, at: 0)
         UserDefaults.standard.set(Array(recent.prefix(8)), forKey: recentKey)
         onChange()
+    }
+}
+
+// MARK: - CreateCollectiveSheet
+
+struct CreateCollectiveSheet: View {
+    @EnvironmentObject var supabase: SupabaseManager
+    @Environment(\.colorScheme) var scheme
+    @Environment(\.dismiss) var dismiss
+
+    let onCreated: (CollectiveEvent) -> Void
+
+    @State private var title = ""
+    @State private var eventDate: Date? = nil
+    @State private var showDatePicker = false
+    @State private var friends: [FriendshipRow] = []
+    @State private var selectedFriendIds: Set<UUID> = []
+    @State private var isSaving = false
+
+    private var myId: UUID? { supabase.user?.id }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("shared memory")
+                    .font(RFont.header(20))
+                    .foregroundColor(RColor.text(scheme))
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(RColor.muted(scheme))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+
+            Divider().opacity(0.4)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        sectionLabel("what happened")
+                        TextField("give it a title…", text: $title)
+                            .textFieldStyle(.plain)
+                            .font(RFont.header(18))
+                            .foregroundColor(RColor.text(scheme))
+                            .padding(14)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(RColor.card(scheme))
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(RColor.border(scheme), lineWidth: 1)))
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        sectionLabel("when")
+                        Button {
+                            if eventDate == nil { eventDate = Date() }
+                            showDatePicker.toggle()
+                        } label: {
+                            HStack {
+                                Text(eventDate.map { formatted($0) } ?? "add a date (optional)")
+                                    .font(RFont.body(14))
+                                    .foregroundColor(eventDate != nil ? RColor.text(scheme) : RColor.muted(scheme))
+                                Spacer()
+                                if eventDate != nil {
+                                    Button { eventDate = nil } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(RColor.muted(scheme))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(14)
+                            .background(RoundedRectangle(cornerRadius: 12).fill(RColor.card(scheme))
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(RColor.border(scheme), lineWidth: 1)))
+                        }
+                        .buttonStyle(.plain)
+                        if showDatePicker, let binding = Binding($eventDate) {
+                            DatePicker("", selection: binding, displayedComponents: .date)
+                                .datePickerStyle(.graphical)
+                                .padding(8)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(RColor.card(scheme)))
+                        }
+                    }
+
+                    if !friends.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            sectionLabel("invite friends")
+                            VStack(spacing: 6) {
+                                ForEach(friends) { friendship in
+                                    if let myId {
+                                        let other = friendship.otherUser(myId: myId)
+                                        let selected = selectedFriendIds.contains(other.id)
+                                        Button {
+                                            if selected { selectedFriendIds.remove(other.id) }
+                                            else { selectedFriendIds.insert(other.id) }
+                                        } label: {
+                                            HStack {
+                                                Text(other.handle)
+                                                    .font(RFont.body(14))
+                                                    .foregroundColor(RColor.text(scheme))
+                                                Spacer()
+                                                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                                    .foregroundColor(selected ? .rMint : RColor.muted(scheme))
+                                            }
+                                            .padding(12)
+                                            .background(RoundedRectangle(cornerRadius: 10).fill(RColor.card(scheme))
+                                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(
+                                                    selected ? Color.rMint.opacity(0.4) : RColor.border(scheme), lineWidth: 1)))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Button {
+                        Task { await create() }
+                    } label: {
+                        Group {
+                            if isSaving {
+                                ProgressView().progressViewStyle(.circular).scaleEffect(0.8)
+                            } else {
+                                Text("create shared memory")
+                                    .font(RFont.body(14).weight(.semibold))
+                                    .foregroundColor(.white)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(
+                            title.trimmingCharacters(in: .whitespaces).isEmpty ? Color.rMint.opacity(0.4) : Color.rMint
+                        ))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || isSaving)
+                }
+                .padding(24)
+            }
+        }
+        .frame(width: 420, height: 560)
+        .task {
+            friends = (try? await supabase.fetchFriends()) ?? []
+        }
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(RFont.mono(10))
+            .foregroundColor(RColor.muted(scheme))
+            .textCase(.uppercase)
+            .tracking(2)
+    }
+
+    private func formatted(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        return f.string(from: date)
+    }
+
+    private func create() async {
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        isSaving = true
+        do {
+            let event = try await supabase.createCollectiveEvent(
+                title: trimmed,
+                date: eventDate,
+                friendIds: Array(selectedFriendIds)
+            )
+            onCreated(event)
+            dismiss()
+        } catch { }
+        isSaving = false
     }
 }
 

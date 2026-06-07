@@ -15,6 +15,8 @@ struct SettingsView: View {
     @State private var isError = false
     @State private var isSaving = false
     @State private var isProfileLoading = true
+    @State private var myUsername: String?
+    @State private var showFriends = false
 
     private func formatInterval(_ minutes: Double) -> String {
         let m = Int(minutes)
@@ -114,6 +116,45 @@ struct SettingsView: View {
                     )
                 }
 
+                // Friends section
+                SettingsSection(title: "friends") {
+                    Button { showFriends = true } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                if let username = myUsername {
+                                    Text("@\(username)")
+                                        .font(RFont.body(14))
+                                        .foregroundColor(RColor.text(scheme))
+                                    Text("tap to manage friends")
+                                        .font(RFont.mono(10))
+                                        .foregroundColor(RColor.muted(scheme))
+                                } else {
+                                    Text("set up your handle")
+                                        .font(RFont.body(13).italic())
+                                        .foregroundColor(.rMint)
+                                    Text("so friends can find you on Ground")
+                                        .font(RFont.mono(10))
+                                        .foregroundColor(RColor.muted(scheme))
+                                }
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11))
+                                .foregroundColor(RColor.muted(scheme))
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12).fill(RColor.card(scheme))
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(RColor.border(scheme), lineWidth: 1))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $showFriends, onDismiss: { Task { await loadProfile() } }) {
+                        FriendsView().environmentObject(supabase)
+                    }
+                }
+
                 // Account section
                 SettingsSection(title: "account") {
                     VStack(alignment: .leading, spacing: 6) {
@@ -198,6 +239,7 @@ struct SettingsView: View {
             isProfileLoading = false
             return
         }
+        myUsername = profile.username
         
         let timeString = profile.quote_start_time ?? "08:00:00"
         let components = timeString.components(separatedBy: ":")
