@@ -2,7 +2,7 @@ import SwiftUI
 import UserNotifications
 
 enum GroundTab {
-    case home, history, notes, stats, abstract, settings
+    case home, history, notes, stats, abstract, chill, settings
 }
 
 struct MainWindowView: View {
@@ -24,7 +24,7 @@ struct MainWindowView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            GroundBackground()
+            GroundBackground(animated: tab == .chill)
 
             VStack(spacing: 0) {
                 // Nav
@@ -42,13 +42,25 @@ struct MainWindowView: View {
 
                     Spacer()
 
-                    HStack(spacing: 4) {
-                        NavTab(label: "home",     selected: tab == .home)     { tab = .home }
-                        NavTab(label: "history",  selected: tab == .history)  { tab = .history }
-                        NavTab(label: "memories", selected: tab == .notes)    { tab = .notes }
-                        NavTab(label: "stats",    selected: tab == .stats)    { tab = .stats }
-                        NavTab(label: "abstract", selected: tab == .abstract) { tab = .abstract }
-                        NavTab(label: "settings", selected: tab == .settings) { tab = .settings }
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 4) {
+                            NavTab(label: "home",     selected: tab == .home)     { tab = .home }
+                            NavTab(label: "history",  selected: tab == .history)  { tab = .history }
+                            NavTab(label: "memories", selected: tab == .notes)    { tab = .notes }
+                            NavTab(label: "stats",    selected: tab == .stats)    { tab = .stats }
+                            NavTab(label: "abstract", selected: tab == .abstract) { tab = .abstract }
+                            NavTab(label: "chill",    selected: tab == .chill)    { tab = .chill }
+                            NavTab(label: "settings", selected: tab == .settings) { tab = .settings }
+                        }
+                        HStack(spacing: 1) {
+                            NavTab(label: "home",     selected: tab == .home,     compact: true) { tab = .home }
+                            NavTab(label: "history",  selected: tab == .history,  compact: true) { tab = .history }
+                            NavTab(label: "memories", selected: tab == .notes,    compact: true) { tab = .notes }
+                            NavTab(label: "stats",    selected: tab == .stats,    compact: true) { tab = .stats }
+                            NavTab(label: "abstract", selected: tab == .abstract, compact: true) { tab = .abstract }
+                            NavTab(label: "chill",    selected: tab == .chill,    compact: true) { tab = .chill }
+                            NavTab(label: "settings", selected: tab == .settings, compact: true) { tab = .settings }
+                        }
                     }
                 }
                 .padding(.horizontal, 32)
@@ -96,6 +108,8 @@ struct MainWindowView: View {
                             AbstractLockedView(answeredCount: answeredEntries.count,
                                               oldestDate: answeredEntries.last?.date)
                         }
+                    case .chill:
+                        ChillView()
                     case .settings:
                         SettingsView()
                             .environmentObject(supabase)
@@ -380,14 +394,15 @@ struct NavTab: View {
     @Environment(\.colorScheme) var scheme
     let label: String
     let selected: Bool
+    var compact: Bool = false
     let action: () -> Void
 
     var body: some View {
         Button(label, action: action)
             .buttonStyle(.plain)
-            .font(RFont.body(13).weight(selected ? .semibold : .regular))
+            .font(RFont.body(compact ? 11 : 13).weight(selected ? .semibold : .regular))
             .foregroundColor(selected ? RColor.text(scheme) : RColor.muted(scheme))
-            .padding(.horizontal, 14)
+            .padding(.horizontal, compact ? 8 : 14)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 8)

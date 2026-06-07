@@ -4,6 +4,7 @@ struct HistoryView: View {
     let entries: [Entry]
     @Environment(\.colorScheme) var scheme
     @State private var selectedCategory: String? = nil
+    @State private var searchText = ""
 
     private var categories: [String] {
         let all = entries.compactMap { $0.category }
@@ -11,12 +12,25 @@ struct HistoryView: View {
     }
 
     private var filtered: [Entry] {
-        guard let cat = selectedCategory else { return entries }
-        return entries.filter { $0.category == cat }
+        var result = selectedCategory == nil ? entries : entries.filter { $0.category == selectedCategory }
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return result }
+        result = result.filter {
+            ($0.answer?.lowercased().contains(q) ?? false) ||
+            $0.categoryLabel.lowercased().contains(q)
+        }
+        return result
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Search bar
+            SearchBar(text: $searchText, placeholder: "search entries...")
+                .padding(.horizontal, 32)
+                .padding(.vertical, 12)
+
+            Divider().opacity(0.4)
+
             // Category filter pills
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -33,17 +47,24 @@ struct HistoryView: View {
                     }
                 }
                 .padding(.horizontal, 32)
-                .padding(.vertical, 16)
+                .padding(.vertical, 12)
             }
 
             Divider().opacity(0.4)
 
             if filtered.isEmpty {
                 Spacer()
-                Text("no entries yet")
-                    .font(RFont.body(14).italic())
-                    .foregroundColor(RColor.muted(scheme))
-                    .frame(maxWidth: .infinity)
+                VStack(spacing: 6) {
+                    Text(searchText.isEmpty ? "no entries yet" : "no results")
+                        .font(RFont.body(14).italic())
+                        .foregroundColor(RColor.muted(scheme))
+                    if !searchText.isEmpty {
+                        Text("try a different keyword or category")
+                            .font(RFont.mono(10))
+                            .foregroundColor(RColor.muted(scheme).opacity(0.55))
+                    }
+                }
+                .frame(maxWidth: .infinity)
                 Spacer()
             } else {
                 ScrollView {
@@ -103,6 +124,54 @@ struct EntryCard: View {
             RoundedRectangle(cornerRadius: 14)
                 .fill(RColor.card(scheme))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(RColor.border(scheme), lineWidth: 1))
+        )
+    }
+}
+
+// MARK: - SearchBar (shared by HistoryView and NotesView)
+
+struct SearchBar: View {
+    @Binding var text: String
+    let placeholder: String
+    @Environment(\.colorScheme) var scheme
+    @FocusState private var isFocused: Bool
+    @State private var clearHovered = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12))
+                .foregroundColor(isFocused ? .rMint : RColor.muted(scheme))
+                .animation(.easeInOut(duration: 0.15), value: isFocused)
+            TextField(placeholder, text: $text)
+                .font(RFont.body(13))
+                .foregroundColor(RColor.text(scheme))
+                .textFieldStyle(.plain)
+                .focused($isFocused)
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(clearHovered ? RColor.text(scheme) : RColor.muted(scheme))
+                }
+                .buttonStyle(.plain)
+                .onHover { clearHovered = $0 }
+                .animation(.easeInOut(duration: 0.1), value: clearHovered)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(RColor.input(scheme))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(
+                            isFocused ? Color.rMint.opacity(0.55) : RColor.border(scheme),
+                            lineWidth: isFocused ? 1.5 : 1
+                        )
+                        .animation(.easeInOut(duration: 0.15), value: isFocused)
+                )
         )
     }
 }

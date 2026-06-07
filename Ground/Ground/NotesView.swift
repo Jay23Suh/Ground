@@ -98,6 +98,7 @@ struct NotesView: View {
     @State private var editingNote: Note? = nil
     @State private var debugError: String = ""
     @State private var selectedPlace: String? = nil
+    @State private var searchText = ""
 
     @State private var visibleYears: Set<String> = []
     @State private var visibleMonthKeys: Set<String> = []
@@ -127,8 +128,35 @@ struct NotesView: View {
     }
 
     private var filteredNotes: [Note] {
-        guard let p = selectedPlace else { return notes }
-        return notes.filter { $0.place == p }
+        var result = selectedPlace == nil ? notes : notes.filter { $0.place == selectedPlace }
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return result }
+        let parsed = parseSearchQuery(q)
+        if let kw = parsed.keyword {
+            result = result.filter { $0.content.lowercased().contains(kw.lowercased()) }
+        }
+        if let y = parsed.year  { result = result.filter { $0.year  == y } }
+        if let m = parsed.month { result = result.filter { $0.month == m } }
+        return result
+    }
+
+    private func parseSearchQuery(_ raw: String) -> (keyword: String?, year: Int?, month: Int?) {
+        let monthMap: [String: Int] = [
+            "january":1,"february":2,"march":3,"april":4,"may":5,"june":6,
+            "july":7,"august":8,"september":9,"october":10,"november":11,"december":12,
+            "jan":1,"feb":2,"mar":3,"apr":4,"jun":6,"jul":7,"aug":8,
+            "sep":9,"sept":9,"oct":10,"nov":11,"dec":12
+        ]
+        var year: Int? = nil
+        var month: Int? = nil
+        var keyTokens: [String] = []
+        for token in raw.lowercased().components(separatedBy: .whitespacesAndNewlines) where !token.isEmpty {
+            if let y = Int(token), y >= 1900, y <= 2100 { year = y }
+            else if let m = monthMap[token]              { month = m }
+            else                                         { keyTokens.append(token) }
+        }
+        let kw = keyTokens.joined(separator: " ")
+        return (kw.isEmpty ? nil : kw, year, month)
     }
 
     var body: some View {
@@ -177,6 +205,10 @@ struct NotesView: View {
 
             Divider().opacity(0.4)
 
+            SearchBar(text: $searchText, placeholder: "search by keyword, year, or month…")
+                .padding(.horizontal, 32)
+                .padding(.vertical, 12)
+
             if !places.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -220,6 +252,18 @@ struct NotesView: View {
                             .multilineTextAlignment(.center)
                             .padding(.top, 8)
                     }
+                }
+                .frame(maxWidth: .infinity)
+                Spacer()
+            } else if filteredNotes.isEmpty {
+                Spacer()
+                VStack(spacing: 6) {
+                    Text("no memories found")
+                        .font(RFont.body(15).italic())
+                        .foregroundColor(RColor.muted(scheme))
+                    Text("try a keyword, year, or \"march 2023\"")
+                        .font(RFont.mono(10))
+                        .foregroundColor(RColor.muted(scheme).opacity(0.55))
                 }
                 .frame(maxWidth: .infinity)
                 Spacer()

@@ -84,6 +84,12 @@ struct RFont {
 
 struct GroundBackground: View {
     @Environment(\.colorScheme) var scheme
+    var animated: Bool = false
+
+    @State private var a1 = false
+    @State private var a2 = false
+    @State private var a3 = false
+    @State private var a4 = false
 
     var body: some View {
         ZStack {
@@ -93,29 +99,37 @@ struct GroundBackground: View {
                 ZStack {
                     if scheme == .dark {
                         RadialGradient(colors: [Color.rPink.opacity(0.45), .clear],
-                                       center: UnitPoint(x: 0.15, y: 0.15),
+                                       center: UnitPoint(x: animated ? (a1 ? 0.22 : 0.10) : 0.15,
+                                                         y: animated ? (a1 ? 0.10 : 0.22) : 0.15),
                                        startRadius: 0, endRadius: w * 0.5)
                         RadialGradient(colors: [Color.rMint.opacity(0.38), .clear],
-                                       center: UnitPoint(x: 0.85, y: 0.1),
+                                       center: UnitPoint(x: animated ? (a2 ? 0.78 : 0.90) : 0.85,
+                                                         y: animated ? (a2 ? 0.18 : 0.05) : 0.10),
                                        startRadius: 0, endRadius: w * 0.45)
                         RadialGradient(colors: [Color.rLavender.opacity(0.35), .clear],
-                                       center: UnitPoint(x: 0.65, y: 0.8),
+                                       center: UnitPoint(x: animated ? (a3 ? 0.58 : 0.72) : 0.65,
+                                                         y: animated ? (a3 ? 0.88 : 0.72) : 0.80),
                                        startRadius: 0, endRadius: w * 0.5)
                         RadialGradient(colors: [Color.rBlue.opacity(0.25), .clear],
-                                       center: UnitPoint(x: 0.5, y: 0.5),
+                                       center: UnitPoint(x: animated ? (a4 ? 0.42 : 0.58) : 0.50,
+                                                         y: animated ? (a4 ? 0.42 : 0.58) : 0.50),
                                        startRadius: 0, endRadius: w * 0.6)
                     } else {
                         RadialGradient(colors: [Color.rPink.opacity(0.65), .clear],
-                                       center: UnitPoint(x: 0.15, y: 0.15),
+                                       center: UnitPoint(x: animated ? (a1 ? 0.22 : 0.10) : 0.15,
+                                                         y: animated ? (a1 ? 0.10 : 0.22) : 0.15),
                                        startRadius: 0, endRadius: w * 0.55)
                         RadialGradient(colors: [Color.rMint.opacity(0.5), .clear],
-                                       center: UnitPoint(x: 0.85, y: 0.1),
+                                       center: UnitPoint(x: animated ? (a2 ? 0.78 : 0.90) : 0.85,
+                                                         y: animated ? (a2 ? 0.18 : 0.05) : 0.10),
                                        startRadius: 0, endRadius: w * 0.5)
                         RadialGradient(colors: [Color.rLavender.opacity(0.45), .clear],
-                                       center: UnitPoint(x: 0.7, y: 0.85),
+                                       center: UnitPoint(x: animated ? (a3 ? 0.62 : 0.76) : 0.70,
+                                                         y: animated ? (a3 ? 0.90 : 0.78) : 0.85),
                                        startRadius: 0, endRadius: w * 0.55)
                         RadialGradient(colors: [Color.rPink.opacity(0.4), .clear],
-                                       center: UnitPoint(x: 0.05, y: 0.8),
+                                       center: UnitPoint(x: animated ? (a4 ? 0.10 : 0.02) : 0.05,
+                                                         y: animated ? (a4 ? 0.72 : 0.86) : 0.80),
                                        startRadius: 0, endRadius: w * 0.5)
                     }
                 }
@@ -123,6 +137,24 @@ struct GroundBackground: View {
             }
         }
         .ignoresSafeArea()
+        .onAppear { if animated { startAnimations() } }
+        .onChange(of: animated) { _, newValue in
+            if newValue { startAnimations() }
+            else { a1 = false; a2 = false; a3 = false; a4 = false }
+        }
+    }
+
+    private func startAnimations() {
+        withAnimation(.easeInOut(duration: 22).repeatForever(autoreverses: true)) { a1 = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            withAnimation(.easeInOut(duration: 28).repeatForever(autoreverses: true)) { a2 = true }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            withAnimation(.easeInOut(duration: 25).repeatForever(autoreverses: true)) { a3 = true }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            withAnimation(.easeInOut(duration: 32).repeatForever(autoreverses: true)) { a4 = true }
+        }
     }
 }
 
