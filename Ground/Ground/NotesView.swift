@@ -103,6 +103,7 @@ struct NotesView: View {
 
     @State private var collectiveEvents: [CollectiveEvent] = []
     @State private var showCreateCollective = false
+    @State private var selectedCollectiveEvent: CollectiveEvent?
 
     @State private var visibleYears: Set<String> = []
     @State private var visibleMonthKeys: Set<String> = []
@@ -178,6 +179,11 @@ struct NotesView: View {
                         notes.removeAll { $0.id == note.id }
                     }
                     editingNote = nil
+                }
+                .environmentObject(supabase)
+            } else if let event = selectedCollectiveEvent {
+                CollectiveEventDetailView(event: event) {
+                    selectedCollectiveEvent = nil
                 }
                 .environmentObject(supabase)
             } else {
@@ -397,6 +403,7 @@ struct NotesView: View {
                 .padding(.vertical, 13)
                 .contentShape(Rectangle())
                 .overlay(Divider().opacity(0.2), alignment: .bottom)
+                .onTapGesture { selectedCollectiveEvent = event }
             }
         }
     }
