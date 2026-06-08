@@ -46,7 +46,7 @@ struct MainWindowView: View {
                         HStack(spacing: 4) {
                             NavTab(label: "home",     selected: tab == .home)     { tab = .home }
                             NavTab(label: "history",  selected: tab == .history)  { tab = .history }
-                            NavTab(label: "memories", selected: tab == .notes)    { tab = .notes }
+                            NavTab(label: "memories", selected: tab == .notes,    badge: supabase.collectiveBadge > 0) { tab = .notes }
                             NavTab(label: "stats",    selected: tab == .stats)    { tab = .stats }
                             NavTab(label: "abstract", selected: tab == .abstract) { tab = .abstract }
                             NavTab(label: "chill",    selected: tab == .chill)    { tab = .chill }
@@ -55,7 +55,7 @@ struct MainWindowView: View {
                         HStack(spacing: 1) {
                             NavTab(label: "home",     selected: tab == .home,     compact: true) { tab = .home }
                             NavTab(label: "history",  selected: tab == .history,  compact: true) { tab = .history }
-                            NavTab(label: "memories", selected: tab == .notes,    compact: true) { tab = .notes }
+                            NavTab(label: "memories", selected: tab == .notes,    compact: true, badge: supabase.collectiveBadge > 0) { tab = .notes }
                             NavTab(label: "stats",    selected: tab == .stats,    compact: true) { tab = .stats }
                             NavTab(label: "abstract", selected: tab == .abstract, compact: true) { tab = .abstract }
                             NavTab(label: "chill",    selected: tab == .chill,    compact: true) { tab = .chill }
@@ -120,10 +120,16 @@ struct MainWindowView: View {
         .frame(minWidth: 640, minHeight: 480)
         .task { await loadEntries() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await loadEntries() }
+            Task {
+                await loadEntries()
+                await supabase.checkForNewCollectivePerspectives()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .didJournal)) { _ in
             Task { await loadEntries() }
+        }
+        .onChange(of: tab) { _, newTab in
+            if newTab == .notes { supabase.collectiveBadge = 0 }
         }
     }
 
@@ -395,18 +401,27 @@ struct NavTab: View {
     let label: String
     let selected: Bool
     var compact: Bool = false
+    var badge: Bool = false
     let action: () -> Void
 
     var body: some View {
-        Button(label, action: action)
-            .buttonStyle(.plain)
-            .font(RFont.body(compact ? 11 : 13).weight(selected ? .semibold : .regular))
-            .foregroundColor(selected ? RColor.text(scheme) : RColor.muted(scheme))
-            .padding(.horizontal, compact ? 8 : 14)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(selected ? RColor.input(scheme) : .clear)
-            )
+        ZStack(alignment: .topTrailing) {
+            Button(label, action: action)
+                .buttonStyle(.plain)
+                .font(RFont.body(compact ? 11 : 13).weight(selected ? .semibold : .regular))
+                .foregroundColor(selected ? RColor.text(scheme) : RColor.muted(scheme))
+                .padding(.horizontal, compact ? 8 : 14)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(selected ? RColor.input(scheme) : .clear)
+                )
+            if badge {
+                Circle()
+                    .fill(Color.rMint)
+                    .frame(width: 6, height: 6)
+                    .offset(x: -2, y: 2)
+            }
+        }
     }
 }

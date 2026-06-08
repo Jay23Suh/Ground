@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import Supabase
 import NaturalLanguage
+import UserNotifications
 
 enum SupabaseManagerError: LocalizedError {
     case notSignedIn
@@ -25,6 +26,7 @@ class SupabaseManager: ObservableObject {
 
     @Published var user: User?
     @Published var sessionRestored = false
+    @Published var collectiveBadge: Int = 0
 
     var userName: String? {
         (user?.userMetadata["name"]?.value as? String)
@@ -482,5 +484,53 @@ class SupabaseManager: ObservableObject {
                 onConflict: "event_id,user_id"
             )
             .execute()
+    }
+
+    func checkForNewCollectivePerspectives() async {
+        guard let uid = user?.id else { return }
+
+        let lastCheckKey = "ground.collectiveLastCheck"
+        let lastCheckTS = UserDefaults.standard.double(forKey: lastCheckKey)
+        let lastCheck = lastCheckTS > 0 ? Date(timeIntervalSince1970: lastCheckTS) : Date.distantPast
+
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastCheckKey)
+
+        let events = (try? await fetchCollectiveEvents()) ?? []
+        guard !events.isEmpty else { return }
+
+        var newCount = 0
+        for event in events {
+            let perspectives = (try? await fetchCollectivePerspectives(eventId: event.id)) ?? []
+            let newOnes = perspectives.filter {
+                $0.user_id != uid && $0.submitted && parseISO($0.updated_at) > lastCheck
+            }
+            for p in newOnes {
+                await fireCollectiveNotification(event: event, author: p.author)
+            }
+            newCount += newOnes.count
+        }
+
+        collectiveBadge += newCount
+    }
+
+    private func parseISO(_ string: String) -> Date {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: string) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: string) ?? Date.distantPast
+    }
+
+    private func fireCollectiveNotification(event: CollectiveEvent, author: FriendProfile?) async {
+        let content = UNMutableNotificationContent()
+        content.title = event.title
+        content.body = "\(author?.handle ?? "a friend") added their memory"
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "collective-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+        try? await UNUserNotificationCenter.current().add(request)
     }
 }
