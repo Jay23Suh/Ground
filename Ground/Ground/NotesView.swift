@@ -897,10 +897,15 @@ struct CreateCollectiveSheet: View {
     @State private var eventDate: Date? = nil
     @State private var showDatePicker = false
     @State private var friends: [FriendshipRow] = []
-    @State private var selectedFriendIds: Set<UUID> = []
+    @State private var invitedProfiles: [FriendProfile] = []
+    @State private var inviteHandle = ""
+    @State private var inviteStatus: InviteStatus = .idle
     @State private var isSaving = false
+    @State private var errorMsg: String?
 
     private var myId: UUID? { supabase.user?.id }
+
+    enum InviteStatus: Equatable { case idle, searching, notFound, alreadyAdded }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -968,30 +973,93 @@ struct CreateCollectiveSheet: View {
                         }
                     }
 
-                    if !friends.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            sectionLabel("invite friends")
-                            VStack(spacing: 6) {
-                                ForEach(friends) { friendship in
-                                    if let myId {
-                                        let other = friendship.otherUser(myId: myId)
-                                        let selected = selectedFriendIds.contains(other.id)
-                                        Button {
-                                            if selected { selectedFriendIds.remove(other.id) }
-                                            else { selectedFriendIds.insert(other.id) }
-                                        } label: {
-                                            HStack {
-                                                Text(other.handle)
-                                                    .font(RFont.body(14))
-                                                    .foregroundColor(RColor.text(scheme))
-                                                Spacer()
-                                                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                                                    .foregroundColor(selected ? .rMint : RColor.muted(scheme))
+                    VStack(alignment: .leading, spacing: 10) {
+                        sectionLabel("invite")
+
+                        // Handle search
+                        HStack(spacing: 6) {
+                            Text("@")
+                                .font(RFont.body(14))
+                                .foregroundColor(RColor.muted(scheme))
+                            TextField("add by handle", text: $inviteHandle)
+                                .textFieldStyle(.plain)
+                                .font(RFont.body(14))
+                                .foregroundColor(RColor.text(scheme))
+                                .autocorrectionDisabled()
+                                .onChange(of: inviteHandle) { _, _ in inviteStatus = .idle }
+                                .onSubmit { Task { await searchAndInvite() } }
+                            Spacer()
+                            if inviteStatus == .searching {
+                                ProgressView().scaleEffect(0.6)
+                            } else {
+                                Button("add") { Task { await searchAndInvite() } }
+                                    .buttonStyle(.plain)
+                                    .font(RFont.body(12).weight(.semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Capsule().fill(Color.rBlue))
+                                    .disabled(inviteHandle.trimmingCharacters(in: .whitespaces).isEmpty)
+                            }
+                        }
+                        .padding(12)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(RColor.input(scheme))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(RColor.border(scheme), lineWidth: 1)))
+
+                        if inviteStatus == .notFound {
+                            Text("no user found with that handle")
+                                .font(RFont.mono(10)).foregroundColor(RColor.muted(scheme))
+                        } else if inviteStatus == .alreadyAdded {
+                            Text("already added")
+                                .font(RFont.mono(10)).foregroundColor(RColor.muted(scheme))
+                        }
+
+                        // Invited chips
+                        if !invitedProfiles.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 6) {
+                                    ForEach(invitedProfiles) { p in
+                                        HStack(spacing: 4) {
+                                            Text(p.handle)
+                                                .font(RFont.mono(10))
+                                                .foregroundColor(.white)
+                                            Button {
+                                                invitedProfiles.removeAll { $0.id == p.id }
+                                            } label: {
+                                                Image(systemName: "xmark")
+                                                    .font(.system(size: 8, weight: .bold))
+                                                    .foregroundColor(.white.opacity(0.8))
                                             }
-                                            .padding(12)
-                                            .background(RoundedRectangle(cornerRadius: 10).fill(RColor.card(scheme))
-                                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(
-                                                    selected ? Color.rMint.opacity(0.4) : RColor.border(scheme), lineWidth: 1)))
+                                            .buttonStyle(.plain)
+                                        }
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(Capsule().fill(Color.rMint))
+                                    }
+                                }
+                            }
+                        }
+
+                        // Friends quick-add
+                        let uninvited: [FriendProfile] = friends.compactMap { f in
+                            guard let myId else { return nil }
+                            let other = f.otherUser(myId: myId)
+                            return invitedProfiles.contains(where: { $0.id == other.id }) ? nil : other
+                        }
+                        if !uninvited.isEmpty {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 6) {
+                                    ForEach(uninvited) { p in
+                                        Button { invitedProfiles.append(p) } label: {
+                                            HStack(spacing: 4) {
+                                                Text(p.handle).font(RFont.mono(10))
+                                                Image(systemName: "plus").font(.system(size: 9))
+                                            }
+                                            .foregroundColor(RColor.text(scheme))
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 5)
+                                            .background(Capsule().fill(RColor.input(scheme))
+                                                .overlay(Capsule().stroke(RColor.border(scheme), lineWidth: 1)))
                                         }
                                         .buttonStyle(.plain)
                                     }
@@ -1020,6 +1088,14 @@ struct CreateCollectiveSheet: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || isSaving)
+
+                    if let msg = errorMsg {
+                        Text(msg)
+                            .font(RFont.mono(10))
+                            .foregroundColor(.rOrange)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
+                    }
                 }
                 .padding(24)
             }
@@ -1044,19 +1120,40 @@ struct CreateCollectiveSheet: View {
         return f.string(from: date)
     }
 
+    private func searchAndInvite() async {
+        let query = inviteHandle.lowercased().trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return }
+        inviteStatus = .searching
+        if let found = try? await supabase.searchUser(username: query) {
+            if invitedProfiles.contains(where: { $0.id == found.id }) {
+                inviteStatus = .alreadyAdded
+            } else {
+                invitedProfiles.append(found)
+                inviteHandle = ""
+                inviteStatus = .idle
+            }
+        } else {
+            inviteStatus = .notFound
+        }
+    }
+
     private func create() async {
         let trimmed = title.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         isSaving = true
+        errorMsg = nil
         do {
             let event = try await supabase.createCollectiveEvent(
                 title: trimmed,
                 date: eventDate,
-                friendIds: Array(selectedFriendIds)
+                friendIds: invitedProfiles.map { $0.id }
             )
             onCreated(event)
             dismiss()
-        } catch { }
+        } catch {
+            print("createCollectiveEvent error:", error)
+            errorMsg = error.localizedDescription
+        }
         isSaving = false
     }
 }
