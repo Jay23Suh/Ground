@@ -79,11 +79,6 @@ struct StatsView: View {
     }
 }
 
-private func hourLabel(_ h: Int) -> String {
-    if h == 0  { return "12am" }
-    if h == 12 { return "12pm" }
-    return h < 12 ? "\(h)am" : "\(h - 12)pm"
-}
 
 struct BigStatCard: View {
     @Environment(\.colorScheme) var scheme

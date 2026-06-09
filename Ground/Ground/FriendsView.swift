@@ -47,6 +47,7 @@ struct FriendsView: View {
     @State private var friends: [FriendshipRow] = []
     @State private var pending: [PendingRequest] = []
     @State private var isLoading = true
+    @State private var actionError: String?
 
     private var myId: UUID? { supabase.user?.id }
 
@@ -76,6 +77,10 @@ struct FriendsView: View {
                             addFriendSection
                             if !pending.isEmpty { pendingSection }
                             friendsSection
+                        }
+                        if let err = actionError {
+                            statusText(err, color: .rOrange)
+                                .frame(maxWidth: .infinity, alignment: .center)
                         }
                     }
                     .padding(24)
@@ -168,7 +173,13 @@ struct FriendsView: View {
                     } else if case .error(let msg) = usernameStatus {
                         statusText(msg, color: .rOrange)
                     } else {
-                        statusText("3–20 chars, letters, numbers, underscores", color: RColor.muted(scheme).opacity(0.6))
+                        let raw = usernameInput.trimmingCharacters(in: .whitespaces)
+                        let lowered = raw.lowercased()
+                        if !raw.isEmpty && raw != lowered {
+                            statusText("will be saved as @\(lowered)", color: RColor.muted(scheme).opacity(0.55))
+                        } else {
+                            statusText("3–20 chars, letters, numbers, underscores", color: RColor.muted(scheme).opacity(0.6))
+                        }
                     }
                 }
                 .padding(14)
@@ -314,12 +325,30 @@ struct FriendsView: View {
                                     .font(RFont.body(14))
                                     .foregroundColor(RColor.text(scheme))
                                 Spacer()
-                                Button { Task { await removeFriend(friendship) } } label: {
-                                    Image(systemName: "person.fill.xmark")
+                                Menu {
+                                    Button("remove friend", role: .destructive) {
+                                        Task { await removeFriend(friendship) }
+                                    }
+                                    Button("block \(other.handle)", role: .destructive) {
+                                        Task {
+                                            try? await supabase.blockUser(other.id)
+                                            await removeFriend(friendship)
+                                        }
+                                    }
+                                    Button("report \(other.handle)", role: .destructive) {
+                                        Task { try? await supabase.reportContent(
+                                            reportedUserId: other.id,
+                                            contentType: "profile",
+                                            contentId: nil
+                                        )}
+                                    }
+                                } label: {
+                                    Image(systemName: "ellipsis")
                                         .font(.system(size: 11))
                                         .foregroundColor(RColor.muted(scheme).opacity(0.4))
                                 }
-                                .buttonStyle(.plain)
+                                .menuStyle(.borderlessButton)
+                                .fixedSize()
                             }
                             .padding(12)
                             .background(card)
@@ -355,12 +384,13 @@ struct FriendsView: View {
 
     private func loadAll() async {
         isLoading = true
+        actionError = nil
         async let profile = supabase.fetchProfile()
         async let fetchedFriends = supabase.fetchFriends()
         async let fetchedPending = supabase.fetchPendingRequests()
         myUsername = await profile?.username
-        friends = (try? await fetchedFriends) ?? []
-        pending = (try? await fetchedPending) ?? []
+        do { friends = try await fetchedFriends } catch { friends = []; actionError = "couldn't load friends" }
+        do { pending = try await fetchedPending } catch { pending = [] }
         isLoading = false
     }
 
@@ -423,13 +453,17 @@ struct FriendsView: View {
         do {
             try await supabase.respondToRequest(request.id, accept: accept)
             await loadAll()
-        } catch { }
+        } catch {
+            actionError = "couldn't respond — try again"
+        }
     }
 
     private func removeFriend(_ friendship: FriendshipRow) async {
         do {
             try await supabase.removeFriend(friendship.id)
             withAnimation { friends.removeAll { $0.id == friendship.id } }
-        } catch { }
+        } catch {
+            actionError = "couldn't remove friend — try again"
+        }
     }
 }

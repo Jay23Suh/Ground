@@ -11,6 +11,7 @@ struct MainWindowView: View {
     @State private var tab: GroundTab = .home
     @State private var entries: [Entry] = []
     @State private var loading = true
+    @State private var showNotificationPrompt = false
 
     private var answeredEntries: [Entry] { entries.filter { !$0.skipped } }
 
@@ -118,7 +119,11 @@ struct MainWindowView: View {
             }
         }
         .frame(minWidth: 640, minHeight: 480)
+        .sheet(isPresented: $showNotificationPrompt) {
+            NotificationPromptView { showNotificationPrompt = false }
+        }
         .task { await loadEntries() }
+        .task { await checkNotificationPrompt() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task {
                 await loadEntries()
@@ -127,9 +132,6 @@ struct MainWindowView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .didJournal)) { _ in
             Task { await loadEntries() }
-        }
-        .onChange(of: tab) { _, newTab in
-            if newTab == .notes { supabase.collectiveBadge = 0 }
         }
     }
 
@@ -142,6 +144,18 @@ struct MainWindowView: View {
             scheduleAbstractNotificationIfNeeded()
         } catch { }
         loading = false
+    }
+
+    private func checkNotificationPrompt() async {
+        let shown = UserDefaults.standard.bool(forKey: "ground.notificationPromptShown")
+        guard !shown, supabase.user != nil else { return }
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard settings.authorizationStatus == .notDetermined else {
+            UserDefaults.standard.set(true, forKey: "ground.notificationPromptShown")
+            return
+        }
+        UserDefaults.standard.set(true, forKey: "ground.notificationPromptShown")
+        showNotificationPrompt = true
     }
 
     private func scheduleAbstractNotificationIfNeeded() {

@@ -30,9 +30,11 @@ struct CollectiveEventDetailView: View {
             // Header — same pattern as NoteEditorView
             HStack {
                 Button {
-                    saveTask?.cancel()
-                    if !isSubmitted { Task { await saveDraft() } }
-                    onBack()
+                    Task {
+                        saveTask?.cancel()
+                        if !isSubmitted { await saveDraft() }
+                        onBack()
+                    }
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.left")
@@ -158,9 +160,30 @@ struct CollectiveEventDetailView: View {
 
                                 ForEach(otherPerspectives) { p in
                                     VStack(alignment: .leading, spacing: 10) {
-                                        Text(p.author?.handle ?? "@unknown")
-                                            .font(RFont.mono(10))
-                                            .foregroundColor(.rMint)
+                                        HStack {
+                                            Text(p.author?.handle ?? "@unknown")
+                                                .font(RFont.mono(10))
+                                                .foregroundColor(.rMint)
+                                            Spacer()
+                                            Menu {
+                                                Button("report this perspective", role: .destructive) {
+                                                    Task { try? await supabase.reportContent(
+                                                        reportedUserId: p.user_id,
+                                                        contentType: "perspective",
+                                                        contentId: p.id
+                                                    )}
+                                                }
+                                                Button("block \(p.author?.handle ?? "user")", role: .destructive) {
+                                                    Task { try? await supabase.blockUser(p.user_id) }
+                                                }
+                                            } label: {
+                                                Image(systemName: "ellipsis")
+                                                    .font(.system(size: 11))
+                                                    .foregroundColor(RColor.muted(scheme).opacity(0.4))
+                                            }
+                                            .menuStyle(.borderlessButton)
+                                            .fixedSize()
+                                        }
                                         Text(p.content)
                                             .font(RFont.body(15))
                                             .foregroundColor(RColor.text(scheme))
@@ -221,7 +244,9 @@ struct CollectiveEventDetailView: View {
             try await supabase.saveCollectivePerspective(eventId: event.id, content: content, submitted: true)
             isSubmitted = true
             allPerspectives = (try? await supabase.fetchCollectivePerspectives(eventId: event.id)) ?? []
-        } catch { }
+        } catch {
+            print("submit perspective error:", error)
+        }
         isSaving = false
     }
 }

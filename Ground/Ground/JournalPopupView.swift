@@ -8,6 +8,7 @@ struct JournalPopupView: View {
     @Environment(\.colorScheme) var scheme
     @State private var answer = ""
     @State private var isSaving = false
+    private let charLimit = 2000
     @FocusState private var focused: Bool
 
     private var categoryLabel: String {
@@ -71,6 +72,17 @@ struct JournalPopupView: View {
                         .padding(.horizontal, 28)
                         .padding(.top, 16)
                         .focused($focused)
+                        .onChange(of: answer) { _, new in
+                            if new.count > charLimit { answer = String(new.prefix(charLimit)) }
+                        }
+
+                    if answer.count > charLimit - 200 {
+                        Text("\(charLimit - answer.count) left")
+                            .font(RFont.mono(10))
+                            .foregroundColor(answer.count > charLimit - 50 ? .rOrange : RColor.muted(scheme).opacity(0.5))
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .padding(.horizontal, 28)
+                    }
 
                     if let errorMessage = supabase.errorMessage, !errorMessage.isEmpty {
                         Text(errorMessage)
@@ -88,7 +100,7 @@ struct JournalPopupView: View {
                             .buttonStyle(SkipButtonStyle())
                         Button("save  ↵") { Task { await handleSave() } }
                             .buttonStyle(SaveButtonStyle())
-                            .disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
+                            .disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving || answer.count > charLimit)
                             .keyboardShortcut(.return, modifiers: .command)
                     }
                     .padding(.horizontal, 28)

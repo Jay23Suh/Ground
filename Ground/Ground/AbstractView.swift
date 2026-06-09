@@ -114,9 +114,12 @@ struct AbstractView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: entries.map(\.id).hashValue) {
             let scores = await Entry.computeSentiment(for: entries)
-            sentimentScores = scores
             let stats = GroundStats(entries: entries, sentimentScores: scores)
-            slides = buildSlides(stats: stats, sentimentScores: scores)
+            let topWords = await Task.detached(priority: .userInitiated) { [entries] in
+                AbstractView.computeTopWords(entries: entries)
+            }.value
+            sentimentScores = scores
+            slides = buildSlides(stats: stats, sentimentScores: scores, topWords: topWords)
         }
         .onKeyPress(.space)      { advance(); return .handled }
         .onKeyPress(.rightArrow) { advance(); return .handled }
@@ -127,12 +130,6 @@ struct AbstractView: View {
         if current < slides.count - 1 {
             withAnimation(.easeInOut(duration: 0.47)) { current += 1 }
         }
-    }
-
-    private func formatHour(_ h: Int) -> String {
-        if h == 0  { return "midnight" }
-        if h == 12 { return "noon" }
-        return h < 12 ? "\(h)am" : "\(h - 12)pm"
     }
 
     private let categoryLabels: [String: String] = [
@@ -154,7 +151,7 @@ struct AbstractView: View {
         "community":  "you were reaching out.",
     ]
 
-    private func buildSlides(stats: GroundStats, sentimentScores: [UUID: Double] = [:]) -> [AbstractSlide] {
+    private func buildSlides(stats: GroundStats, sentimentScores: [UUID: Double] = [:], topWords: [String] = []) -> [AbstractSlide] {
         var s: [AbstractSlide] = [.init(type: .title)]
 
         // 1. Entries
@@ -191,7 +188,7 @@ struct AbstractView: View {
 
         // 5. Most active day/time
         if let day = stats.mostActiveDay {
-            let sub = stats.mostActiveHour.map { "usually around \(formatHour($0))" }
+            let sub = stats.mostActiveHour.map { "usually around \(hourLabel($0))" }
                 ?? "whenever the moment felt right."
             s.append(.init(type: .text(
                 bg: Color(hex: "#101f22"), accent: Color(hex: "#60d4e8"),
@@ -201,7 +198,6 @@ struct AbstractView: View {
         }
 
         // 6. Word cloud
-        let topWords = computeTopWords()
         if topWords.count >= 3 {
             s.append(.init(type: .wordCloud(
                 bg: Color(hex: "#121218"),
@@ -273,7 +269,7 @@ struct AbstractView: View {
         return cleaned.count > 120 ? String(cleaned.prefix(120)) + "…" : cleaned
     }
 
-    private func computeTopWords() -> [String] {
+    private static func computeTopWords(entries: [Entry]) -> [String] {
         let stopWords: Set<String> = [
             // pronouns
             "i","me","my","myself","we","our","ours","ourselves","you","your","yours",
@@ -808,25 +804,35 @@ struct TypewriterText: View {
     var speed: Double = 0.03
 
     @State private var displayed = ""
+    @State private var animTask: Task<Void, Never>?
 
     var body: some View {
         Text(displayed)
             .font(font)
             .foregroundColor(color)
             .onChange(of: trigger) { _, isActive in
-                if isActive { startAnimation() } else { displayed = "" }
+                if isActive { startAnimation() } else { stopAnimation() }
             }
             .onAppear { if trigger { startAnimation() } }
+            .onDisappear { animTask?.cancel() }
     }
 
     private func startAnimation() {
+        animTask?.cancel()
         displayed = ""
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            for (i, char) in text.enumerated() {
-                DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * speed) {
-                    displayed.append(char)
-                }
+        animTask = Task {
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            for char in text {
+                guard !Task.isCancelled else { return }
+                displayed.append(char)
+                try? await Task.sleep(for: .seconds(speed))
             }
         }
+    }
+
+    private func stopAnimation() {
+        animTask?.cancel()
+        displayed = ""
     }
 }

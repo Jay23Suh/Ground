@@ -1,6 +1,7 @@
 import SwiftUI
 import Auth
 import Supabase
+import UserNotifications
 
 struct SettingsView: View {
     @EnvironmentObject var supabase: SupabaseManager
@@ -17,6 +18,27 @@ struct SettingsView: View {
     @State private var isProfileLoading = true
     @State private var myUsername: String?
     @State private var showFriends = false
+    @State private var showDeleteConfirm = false
+    @State private var isDeleting = false
+    @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
+
+    private var notificationStatusLabel: String {
+        switch notificationStatus {
+        case .authorized, .provisional, .ephemeral: return "enabled"
+        case .denied:          return "disabled — tap to open settings"
+        case .notDetermined:   return "not set up yet"
+        @unknown default:      return "unknown"
+        }
+    }
+
+    private var notificationStatusColor: Color {
+        switch notificationStatus {
+        case .authorized, .provisional, .ephemeral: return .rMint
+        case .denied:        return .rOrange
+        case .notDetermined: return RColor.muted(.light).opacity(0.6)
+        @unknown default:    return RColor.muted(.light).opacity(0.6)
+        }
+    }
 
     private func formatInterval(_ minutes: Double) -> String {
         let m = Int(minutes)
@@ -107,6 +129,39 @@ struct SettingsView: View {
                                     RoundedRectangle(cornerRadius: 8).fill(RColor.input(scheme))
                                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(RColor.border(scheme), lineWidth: 1))
                                 )
+                        }
+                    }
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12).fill(RColor.card(scheme))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(RColor.border(scheme), lineWidth: 1))
+                    )
+                }
+
+                // Notifications
+                SettingsSection(title: "notifications") {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("check-in reminders")
+                                .font(RFont.body(13))
+                                .foregroundColor(RColor.text(scheme))
+                            Text(notificationStatusLabel)
+                                .font(RFont.mono(10))
+                                .foregroundColor(notificationStatusColor)
+                        }
+                        Spacer()
+                        if notificationStatus != .authorized {
+                            Button("open settings") {
+                                NSWorkspace.shared.open(
+                                    URL(string: "x-apple.systempreferences:com.apple.preference.notifications")!
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .font(RFont.body(12))
+                            .foregroundColor(.rOrange)
+                        } else {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.rMint)
                         }
                     }
                     .padding(14)
@@ -211,26 +266,56 @@ struct SettingsView: View {
                     }
                 }
 
-                // Sign out
+                // Sign out + delete
                 SettingsSection(title: "session") {
-                    Button {
-                        Task { try? await supabase.signOut() }
-                    } label: {
-                        Text("sign out")
-                            .font(RFont.body(13))
-                            .foregroundColor(RColor.muted(scheme))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(RoundedRectangle(cornerRadius: 10).fill(RColor.card(scheme))
-                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(RColor.border(scheme), lineWidth: 1)))
+                    VStack(spacing: 8) {
+                        Button {
+                            Task { try? await supabase.signOut() }
+                        } label: {
+                            Text("sign out")
+                                .font(RFont.body(13))
+                                .foregroundColor(RColor.muted(scheme))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(RColor.card(scheme))
+                                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(RColor.border(scheme), lineWidth: 1)))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            showDeleteConfirm = true
+                        } label: {
+                            Text(isDeleting ? "deleting…" : "delete account")
+                                .font(RFont.body(13))
+                                .foregroundColor(.red.opacity(0.7))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(RoundedRectangle(cornerRadius: 10).fill(RColor.card(scheme))
+                                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.red.opacity(0.25), lineWidth: 1)))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isDeleting)
+                        .confirmationDialog(
+                            "delete account?",
+                            isPresented: $showDeleteConfirm,
+                            titleVisibility: .visible
+                        ) {
+                            Button("delete everything", role: .destructive) {
+                                Task { await handleDeleteAccount() }
+                            }
+                            Button("cancel", role: .cancel) { }
+                        } message: {
+                            Text("This permanently deletes your journal entries, memories, and account. This cannot be undone.")
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
             }
             .padding(32)
         }
         .task {
             await loadProfile()
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
+            notificationStatus = settings.authorizationStatus
         }
     }
 
@@ -264,6 +349,17 @@ struct SettingsView: View {
         let timeString = String(format: "%02d:%02d:00", hours, minutes)
         UserDefaults.standard.set(String(format: "%02d:%02d", hours, minutes), forKey: "groundQuoteStartTime")
         try? await supabase.updateProfile(startTime: timeString)
+    }
+
+    private func handleDeleteAccount() async {
+        isDeleting = true
+        do {
+            try await supabase.deleteAccount()
+        } catch {
+            statusMessage = "deletion failed — contact support"
+            isError = true
+        }
+        isDeleting = false
     }
 
     private func handleChangePassword() async {

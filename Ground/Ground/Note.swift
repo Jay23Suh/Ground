@@ -8,6 +8,7 @@ struct Note: Codable, Identifiable {
     var month: Int?
     var day: Int?
     var place: String?
+    var collective_event_id: UUID?
     let created_at: String
     var updated_at: String
 
@@ -19,9 +20,7 @@ struct Note: Codable, Identifiable {
         return first.isEmpty ? "empty note" : String(first.prefix(80))
     }
 
-    var wordCount: Int {
-        content.split(whereSeparator: \.isWhitespace).count
-    }
+    var wordCount: Int { content.wordCount }
 
     var displayDate: String {
         guard let y = year else { return "undated" }

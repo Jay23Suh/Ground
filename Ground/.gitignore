@@ -17,5 +17,8 @@ DerivedData/
 .build/
 .swiftpm/
 
+# Secrets — never commit
+Secrets.xcconfig
+
 # macOS
 .DS_Store

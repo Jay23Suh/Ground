@@ -36,14 +36,25 @@ class QuoteService: ObservableObject {
         }
 
         do {
-            let (data, _) = try await URLSession.shared.data(from: zenQuotesURL)
-            if let quotes = try? JSONDecoder().decode([Quote].self, from: data), let quote = quotes.first {
+            let (data, response) = try await URLSession.shared.data(from: zenQuotesURL)
+            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                print("ZenQuotes returned status \(http.statusCode)")
+            } else if let quotes = try? JSONDecoder().decode([Quote].self, from: data), let quote = quotes.first {
                 saveToCache(quote: quote, date: today)
                 currentQuote = quote
                 return quote
+            } else {
+                print("ZenQuotes decode failed: \(String(data: data, encoding: .utf8) ?? "<binary>")")
             }
         } catch {
             print("Failed to fetch quote: \(error)")
+        }
+
+        // Use stale cache rather than the generic fallback
+        if let cachedData = UserDefaults.standard.data(forKey: cacheKey),
+           let cached = try? JSONDecoder().decode(QuoteCache.self, from: cachedData) {
+            currentQuote = cached.quote
+            return cached.quote
         }
 
         let fallback = Quote(q: "Stay grounded.", a: "Ground")

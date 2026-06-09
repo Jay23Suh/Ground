@@ -19,10 +19,22 @@ enum SupabaseManagerError: LocalizedError {
 class SupabaseManager: ObservableObject {
     static let shared = SupabaseManager()
 
-    let client = SupabaseClient(
-        supabaseURL: URL(string: "https://opilhmterqutsdgdasjz.supabase.co")!,
-        supabaseKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9waWxobXRlcnF1dHNkZ2Rhc2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzNjM4OTUsImV4cCI6MjA4ODkzOTg5NX0.yC2ajoHQyo3gCEDXgDenxOj5juwbbxFqK1R78s55JTI"
-    )
+    private static let isoFormatter = ISO8601DateFormatter()
+    private var backfillRanThisSession = false
+
+    let client: SupabaseClient = {
+        let info = Bundle.main.infoDictionary
+        let urlStr = info?["SUPABASE_URL"]      as? String ?? ""
+        let key    = info?["SUPABASE_ANON_KEY"] as? String ?? ""
+        let parsedURL = URL(string: urlStr)
+        let resolvedURL = (parsedURL?.host != nil)
+            ? parsedURL!
+            : URL(string: "https://opilhmterqutsdgdasjz.supabase.co")!
+        let resolvedKey = key.isEmpty
+            ? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9waWxobXRlcnF1dHNkZ2Rhc2p6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzNjM4OTUsImV4cCI6MjA4ODkzOTg5NX0.yC2ajoHQyo3gCEDXgDenxOj5juwbbxFqK1R78s55JTI"
+            : key
+        return SupabaseClient(supabaseURL: resolvedURL, supabaseKey: resolvedKey)
+    }()
 
     @Published var user: User?
     @Published var sessionRestored = false
@@ -111,6 +123,38 @@ class SupabaseManager: ObservableObject {
         }
     }
 
+    func deleteAccount() async throws {
+        try await client.rpc("delete_account").execute()
+        try await client.auth.signOut()
+        user = nil
+    }
+
+    func reportContent(reportedUserId: UUID, contentType: String, contentId: UUID?) async throws {
+        guard let uid = user?.id else { throw SupabaseManagerError.notSignedIn }
+        struct ReportInsert: Encodable {
+            let reporter_id: String
+            let reported_user_id: String
+            let content_type: String
+            let content_id: String?
+        }
+        try await client.from("reports")
+            .insert(ReportInsert(
+                reporter_id: uid.uuidString,
+                reported_user_id: reportedUserId.uuidString,
+                content_type: contentType,
+                content_id: contentId?.uuidString
+            ))
+            .execute()
+    }
+
+    func blockUser(_ userId: UUID) async throws {
+        guard let uid = user?.id else { throw SupabaseManagerError.notSignedIn }
+        struct BlockInsert: Encodable { let blocker_id: String; let blocked_id: String }
+        try await client.from("blocks")
+            .insert(BlockInsert(blocker_id: uid.uuidString, blocked_id: userId.uuidString))
+            .execute()
+    }
+
     func saveEntry(question: String, category: String, answer: String) async throws {
         guard let uid = user?.id else {
             let error = SupabaseManagerError.notSignedIn
@@ -176,7 +220,7 @@ class SupabaseManager: ObservableObject {
 
     func createNote() async throws -> Note {
         guard let uid = user?.id else { throw SupabaseManagerError.notSignedIn }
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = SupabaseManager.isoFormatter.string(from: Date())
         let id = UUID()
         struct InsertNote: Encodable {
             let id: String; let user_id: String; let content: String
@@ -194,27 +238,76 @@ class SupabaseManager: ObservableObject {
     func updateNote(_ note: Note) async throws {
         struct NoteUpdate: Encodable {
             let content: String; let year: Int?; let month: Int?; let day: Int?
-            let place: String?; let updated_at: String
+            let place: String?; let collective_event_id: String?; let updated_at: String
         }
         try await client
             .from("notes")
             .update(NoteUpdate(content: note.content, year: note.year, month: note.month,
                                day: note.day, place: note.place,
-                               updated_at: ISO8601DateFormatter().string(from: Date())))
+                               collective_event_id: note.collective_event_id?.uuidString,
+                               updated_at: SupabaseManager.isoFormatter.string(from: Date())))
             .eq("id", value: note.id.uuidString)
             .execute()
     }
 
+    func shareNote(noteId: UUID, noteContent: String, notePreview: String,
+                   noteDateStr: String?, addUserId: UUID, existingEventId: UUID?) async throws -> UUID {
+        guard let uid = user?.id else { throw SupabaseManagerError.notSignedIn }
+        let now = SupabaseManager.isoFormatter.string(from: Date())
+        struct MemberInsert: Encodable { let event_id: String; let user_id: String; let invited_by: String }
+
+        let eventId: UUID
+        if let existing = existingEventId {
+            eventId = existing
+        } else {
+            eventId = UUID()
+            struct EventInsert: Encodable {
+                let id: String; let title: String; let event_date: String?
+                let created_by: String; let created_at: String
+            }
+            try await client.from("collective_events")
+                .insert(EventInsert(id: eventId.uuidString, title: notePreview,
+                                    event_date: noteDateStr, created_by: uid.uuidString, created_at: now))
+                .execute()
+
+            try await client.from("collective_members")
+                .insert(MemberInsert(event_id: eventId.uuidString, user_id: uid.uuidString, invited_by: uid.uuidString))
+                .execute()
+
+            try await client.from("notes")
+                .update(["collective_event_id": eventId.uuidString])
+                .eq("id", value: noteId.uuidString)
+                .execute()
+
+            struct PerspUpsert: Encodable {
+                let event_id: String; let user_id: String
+                let content: String; let submitted: Bool; let updated_at: String
+            }
+            try await client.from("collective_perspectives")
+                .upsert(PerspUpsert(event_id: eventId.uuidString, user_id: uid.uuidString,
+                                    content: noteContent, submitted: true, updated_at: now),
+                        onConflict: "event_id,user_id")
+                .execute()
+        }
+
+        try await client.from("collective_members")
+            .insert(MemberInsert(event_id: eventId.uuidString, user_id: addUserId.uuidString, invited_by: uid.uuidString))
+            .execute()
+
+        return eventId
+    }
+
     func backfillPlaces(in notes: [Note]) async {
+        guard !backfillRanThisSession else { return }
         guard let uid = user?.id else { return }
         let candidates = notes.filter { $0.place == nil && !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        guard !candidates.isEmpty else { return }
+        guard !candidates.isEmpty else { backfillRanThisSession = true; return }
 
         struct PlacePatch: Encodable, Sendable { let place: String; let updated_at: String }
 
+        let now = SupabaseManager.isoFormatter.string(from: Date())
         await Task.detached(priority: .utility) {
             let tagger = NLTagger(tagSchemes: [.nameType])
-            let now = ISO8601DateFormatter().string(from: Date())
 
             for note in candidates {
                 tagger.string = note.content
@@ -235,6 +328,7 @@ class SupabaseManager: ObservableObject {
                     .execute()
             }
         }.value
+        backfillRanThisSession = true
     }
 
     func deleteNote(id: UUID) async throws {
@@ -270,7 +364,7 @@ class SupabaseManager: ObservableObject {
             .upsert(
                 Activity(
                     user_id: uid.uuidString,
-                    last_popup_shown: ISO8601DateFormatter().string(from: Date())
+                    last_popup_shown: SupabaseManager.isoFormatter.string(from: Date())
                 ),
                 onConflict: "user_id"
             )
@@ -296,7 +390,7 @@ class SupabaseManager: ObservableObject {
 
     func updateLastQuoteShown() async {
         guard let uid = user?.id else { return }
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = SupabaseManager.isoFormatter.string(from: Date())
         do {
             try await client.from("profiles")
                 .update(["last_quote_shown_at": now])
@@ -408,7 +502,7 @@ class SupabaseManager: ObservableObject {
     func createCollectiveEvent(title: String, date: Date?, friendIds: [UUID]) async throws -> CollectiveEvent {
         guard let uid = user?.id else { throw SupabaseManagerError.notSignedIn }
         let id = UUID()
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = SupabaseManager.isoFormatter.string(from: Date())
         let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"
         let dateStr = date.map { df.string(from: $0) }
 
@@ -472,7 +566,7 @@ class SupabaseManager: ObservableObject {
 
     func saveCollectivePerspective(eventId: UUID, content: String, submitted: Bool) async throws {
         guard let uid = user?.id else { throw SupabaseManagerError.notSignedIn }
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = SupabaseManager.isoFormatter.string(from: Date())
         struct PerspectiveUpsert: Encodable {
             let event_id: String; let user_id: String
             let content: String; let submitted: Bool; let updated_at: String
@@ -513,12 +607,20 @@ class SupabaseManager: ObservableObject {
         collectiveBadge += newCount
     }
 
-    private func parseISO(_ string: String) -> Date {
+    private static let isoParserFull: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let d = f.date(from: string) { return d }
+        return f
+    }()
+    private static let isoParserBasic: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
-        return f.date(from: string) ?? Date.distantPast
+        return f
+    }()
+
+    private func parseISO(_ string: String) -> Date {
+        if let d = SupabaseManager.isoParserFull.date(from: string) { return d }
+        return SupabaseManager.isoParserBasic.date(from: string) ?? Date.distantPast
     }
 
     private func fireCollectiveNotification(event: CollectiveEvent, author: FriendProfile?) async {

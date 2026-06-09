@@ -16,9 +16,7 @@ struct Entry: Codable, Identifiable {
         return f.date(from: created_at) ?? Date()
     }
 
-    var wordCount: Int {
-        answer?.split(separator: " ").count ?? 0
-    }
+    var wordCount: Int { answer?.wordCount ?? 0 }
 
     // Run off the main thread — use computeSentiment(for:) in a Task
     static func sentimentScore(for text: String) -> Double? {

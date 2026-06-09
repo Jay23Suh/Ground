@@ -100,9 +100,9 @@ struct NotesView: View {
     @State private var debugError: String = ""
     @State private var selectedPlace: String? = nil
     @State private var searchText = ""
+    @State private var debouncedSearch = ""
+    @State private var searchDebounceTask: Task<Void, Never>?
 
-    @State private var collectiveEvents: [CollectiveEvent] = []
-    @State private var showCreateCollective = false
     @State private var selectedCollectiveEvent: CollectiveEvent?
 
     @State private var visibleYears: Set<String> = []
@@ -134,7 +134,7 @@ struct NotesView: View {
 
     private var filteredNotes: [Note] {
         var result = selectedPlace == nil ? notes : notes.filter { $0.place == selectedPlace }
-        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let q = debouncedSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return result }
         let parsed = parseSearchQuery(q)
         if let kw = parsed.keyword {
@@ -200,22 +200,6 @@ struct NotesView: View {
                     .font(RFont.header(28))
                     .foregroundColor(RColor.text(scheme))
                 Spacer()
-                Button { showCreateCollective = true } label: {
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.rMint)
-                        .padding(8)
-                        .background(Circle().fill(RColor.card(scheme))
-                            .overlay(Circle().stroke(RColor.border(scheme), lineWidth: 1)))
-                }
-                .buttonStyle(.plain)
-                .sheet(isPresented: $showCreateCollective) {
-                    CreateCollectiveSheet { event in
-                        collectiveEvents.insert(event, at: 0)
-                    }
-                    .environmentObject(supabase)
-                }
-
                 Button { Task { await newNote() } } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 15, weight: .medium))
@@ -234,6 +218,18 @@ struct NotesView: View {
             SearchBar(text: $searchText, placeholder: "search by keyword, year, or month…")
                 .padding(.horizontal, 32)
                 .padding(.vertical, 12)
+                .onChange(of: searchText) { _, new in
+                    searchDebounceTask?.cancel()
+                    if new.isEmpty {
+                        debouncedSearch = ""
+                    } else {
+                        searchDebounceTask = Task {
+                            try? await Task.sleep(for: .milliseconds(250))
+                            guard !Task.isCancelled else { return }
+                            debouncedSearch = new
+                        }
+                    }
+                }
 
             if !places.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -253,7 +249,7 @@ struct NotesView: View {
                 Divider().opacity(0.4)
             }
 
-            if !collectiveEvents.isEmpty {
+            if !sharedNotes.isEmpty {
                 collectiveSection
                 Divider().opacity(0.4)
             }
@@ -365,7 +361,10 @@ struct NotesView: View {
                 }
             }
         }
+        .onAppear { supabase.collectiveBadge = 0 }
     }
+
+    private var sharedNotes: [Note] { notes.filter { $0.collective_event_id != nil } }
 
     private var collectiveSection: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -378,18 +377,18 @@ struct NotesView: View {
                 .padding(.top, 16)
                 .padding(.bottom, 8)
 
-            ForEach(collectiveEvents) { event in
+            ForEach(sharedNotes) { note in
                 HStack(spacing: 12) {
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 11))
                         .foregroundColor(.rMint)
                         .frame(width: 20)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(event.title)
+                        Text(note.preview)
                             .font(RFont.body(14))
                             .foregroundColor(RColor.text(scheme))
-                        if let date = event.displayDate {
-                            Text(date)
+                        if let meta = note.displayMeta {
+                            Text(meta)
                                 .font(RFont.mono(10))
                                 .foregroundColor(RColor.muted(scheme))
                         }
@@ -403,17 +402,25 @@ struct NotesView: View {
                 .padding(.vertical, 13)
                 .contentShape(Rectangle())
                 .overlay(Divider().opacity(0.2), alignment: .bottom)
-                .onTapGesture { selectedCollectiveEvent = event }
+                .onTapGesture {
+                    guard let eventId = note.collective_event_id else { return }
+                    let dateStr: String? = {
+                        guard let y = note.year, let m = note.month, let d = note.day else { return nil }
+                        return String(format: "%04d-%02d-%02d", y, m, d)
+                    }()
+                    selectedCollectiveEvent = CollectiveEvent(
+                        id: eventId, title: note.preview,
+                        event_date: dateStr,
+                        created_by: UUID(), created_at: note.created_at
+                    )
+                }
             }
         }
     }
 
     private func loadNotes() async {
         loading = true
-        async let notesFetch = supabase.fetchNotes()
-        async let collectiveFetch = supabase.fetchCollectiveEvents()
-        notes = (try? await notesFetch) ?? []
-        collectiveEvents = (try? await collectiveFetch) ?? []
+        notes = (try? await supabase.fetchNotes()) ?? []
         loading = false
         Task { await supabase.backfillPlaces(in: notes) }
     }
@@ -571,19 +578,22 @@ struct NoteEditorView: View {
     @State private var month: Int?
     @State private var day: Int?
     @State private var place: String?
+    @State private var collectiveEventId: UUID?
     @State private var showDatePicker = false
     @State private var showPlacePicker = false
+    @State private var showInvite = false
     @State private var saveTask: Task<Void, Never>?
     @FocusState private var editorFocused: Bool
 
     init(note: Note, onDone: @escaping (NoteEditorResult) -> Void) {
         self.original = note
         self.onDone = onDone
-        _content  = State(initialValue: note.content)
-        _yearText = State(initialValue: note.year.map { "\($0)" } ?? "")
-        _month    = State(initialValue: note.month)
-        _day      = State(initialValue: note.day)
-        _place    = State(initialValue: note.place)
+        _content          = State(initialValue: note.content)
+        _yearText         = State(initialValue: note.year.map { "\($0)" } ?? "")
+        _month            = State(initialValue: note.month)
+        _day              = State(initialValue: note.day)
+        _place            = State(initialValue: note.place)
+        _collectiveEventId = State(initialValue: note.collective_event_id)
     }
 
     var body: some View {
@@ -639,6 +649,39 @@ struct NoteEditorView: View {
                     }
                 }
 
+                Button { showInvite.toggle() } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: collectiveEventId != nil ? "person.2.fill" : "person.2")
+                            .font(.system(size: 11))
+                        if collectiveEventId == nil {
+                            Text("@")
+                                .font(RFont.mono(10))
+                        }
+                    }
+                    .foregroundColor(collectiveEventId != nil ? .rMint : RColor.muted(scheme))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(RColor.card(scheme))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(
+                            collectiveEventId != nil ? Color.rMint.opacity(0.4) : RColor.border(scheme),
+                            lineWidth: 1
+                        )))
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showInvite, arrowEdge: .bottom) {
+                    NoteInvitePopover(
+                        noteId: original.id,
+                        noteContent: content,
+                        notePreview: original.preview,
+                        noteDateStr: {
+                            guard let y = Int(yearText), let m = month, let d = day else { return nil }
+                            return String(format: "%04d-%02d-%02d", y, m, d)
+                        }(),
+                        collectiveEventId: $collectiveEventId
+                    )
+                    .environmentObject(supabase)
+                }
+
                 Spacer()
 
                 Button { Task { await deleteNote() } } label: {
@@ -690,6 +733,7 @@ struct NoteEditorView: View {
         updated.month = month
         updated.day = day
         updated.place = place?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().nilIfEmpty
+        updated.collective_event_id = collectiveEventId
         try? await supabase.updateNote(updated)
         return updated
     }
@@ -884,20 +928,21 @@ private struct PlacePickerPopover: View {
     }
 }
 
-// MARK: - CreateCollectiveSheet
+// MARK: - NoteInvitePopover
 
-struct CreateCollectiveSheet: View {
+struct NoteInvitePopover: View {
     @EnvironmentObject var supabase: SupabaseManager
     @Environment(\.colorScheme) var scheme
+
+    let noteId: UUID
+    let noteContent: String
+    let notePreview: String
+    let noteDateStr: String?
+    @Binding var collectiveEventId: UUID?
     @Environment(\.dismiss) var dismiss
 
-    let onCreated: (CollectiveEvent) -> Void
-
-    @State private var title = ""
-    @State private var eventDate: Date? = nil
-    @State private var showDatePicker = false
     @State private var friends: [FriendshipRow] = []
-    @State private var invitedProfiles: [FriendProfile] = []
+    @State private var members: [FriendProfile] = []
     @State private var inviteHandle = ""
     @State private var inviteStatus: InviteStatus = .idle
     @State private var isSaving = false
@@ -905,253 +950,147 @@ struct CreateCollectiveSheet: View {
 
     private var myId: UUID? { supabase.user?.id }
 
-    enum InviteStatus: Equatable { case idle, searching, notFound, alreadyAdded }
+    enum InviteStatus: Equatable { case idle, searching, notFound, alreadyMember }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("shared memory")
-                    .font(RFont.header(20))
+        VStack(alignment: .leading, spacing: 16) {
+            Text(collectiveEventId == nil ? "share this memory" : "shared with")
+                .font(RFont.mono(10))
+                .foregroundColor(RColor.muted(scheme))
+                .tracking(3)
+                .textCase(.uppercase)
+
+            // Current members
+            if !members.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(members) { p in
+                            Text(p.handle)
+                                .font(RFont.mono(10))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Capsule().fill(Color.rMint))
+                        }
+                    }
+                }
+            }
+
+            // Handle search
+            HStack(spacing: 6) {
+                Text("@")
+                    .font(RFont.body(14))
+                    .foregroundColor(RColor.muted(scheme))
+                TextField("add by handle", text: $inviteHandle)
+                    .textFieldStyle(.plain)
+                    .font(RFont.body(14))
                     .foregroundColor(RColor.text(scheme))
+                    .autocorrectionDisabled()
+                    .onChange(of: inviteHandle) { _, _ in inviteStatus = .idle }
+                    .onSubmit { Task { await addByHandle() } }
                 Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(RColor.muted(scheme))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
-
-            Divider().opacity(0.4)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        sectionLabel("what happened")
-                        TextField("give it a title…", text: $title)
-                            .textFieldStyle(.plain)
-                            .font(RFont.header(18))
-                            .foregroundColor(RColor.text(scheme))
-                            .padding(14)
-                            .background(RoundedRectangle(cornerRadius: 12).fill(RColor.card(scheme))
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(RColor.border(scheme), lineWidth: 1)))
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        sectionLabel("when")
-                        Button {
-                            if eventDate == nil { eventDate = Date() }
-                            showDatePicker.toggle()
-                        } label: {
-                            HStack {
-                                Text(eventDate.map { formatted($0) } ?? "add a date (optional)")
-                                    .font(RFont.body(14))
-                                    .foregroundColor(eventDate != nil ? RColor.text(scheme) : RColor.muted(scheme))
-                                Spacer()
-                                if eventDate != nil {
-                                    Button { eventDate = nil } label: {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .font(.system(size: 13))
-                                            .foregroundColor(RColor.muted(scheme))
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(14)
-                            .background(RoundedRectangle(cornerRadius: 12).fill(RColor.card(scheme))
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(RColor.border(scheme), lineWidth: 1)))
-                        }
+                if inviteStatus == .searching || isSaving {
+                    ProgressView().scaleEffect(0.6)
+                } else {
+                    Button("add") { Task { await addByHandle() } }
                         .buttonStyle(.plain)
-                        if showDatePicker, let binding = Binding($eventDate) {
-                            DatePicker("", selection: binding, displayedComponents: .date)
-                                .datePickerStyle(.graphical)
-                                .padding(8)
-                                .background(RoundedRectangle(cornerRadius: 12).fill(RColor.card(scheme)))
-                        }
-                    }
+                        .font(RFont.body(12).weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.rBlue))
+                        .disabled(inviteHandle.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 10).fill(RColor.input(scheme))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(RColor.border(scheme), lineWidth: 1)))
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        sectionLabel("invite")
+            if inviteStatus == .notFound {
+                Text("no user found with that handle")
+                    .font(RFont.mono(10)).foregroundColor(RColor.muted(scheme))
+            } else if inviteStatus == .alreadyMember {
+                Text("already sharing with this person")
+                    .font(RFont.mono(10)).foregroundColor(RColor.muted(scheme))
+            }
 
-                        // Handle search
-                        HStack(spacing: 6) {
-                            Text("@")
-                                .font(RFont.body(14))
-                                .foregroundColor(RColor.muted(scheme))
-                            TextField("add by handle", text: $inviteHandle)
-                                .textFieldStyle(.plain)
-                                .font(RFont.body(14))
+            // Friends quick-add
+            let uninvited: [FriendProfile] = friends.compactMap { f in
+                guard let myId else { return nil }
+                let other = f.otherUser(myId: myId)
+                return members.contains(where: { $0.id == other.id }) ? nil : other
+            }
+            if !uninvited.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(uninvited) { p in
+                            Button { Task { await invite(profile: p) } } label: {
+                                HStack(spacing: 4) {
+                                    Text(p.handle).font(RFont.mono(10))
+                                    Image(systemName: "plus").font(.system(size: 9))
+                                }
                                 .foregroundColor(RColor.text(scheme))
-                                .autocorrectionDisabled()
-                                .onChange(of: inviteHandle) { _, _ in inviteStatus = .idle }
-                                .onSubmit { Task { await searchAndInvite() } }
-                            Spacer()
-                            if inviteStatus == .searching {
-                                ProgressView().scaleEffect(0.6)
-                            } else {
-                                Button("add") { Task { await searchAndInvite() } }
-                                    .buttonStyle(.plain)
-                                    .font(RFont.body(12).weight(.semibold))
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
-                                    .background(Capsule().fill(Color.rBlue))
-                                    .disabled(inviteHandle.trimmingCharacters(in: .whitespaces).isEmpty)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Capsule().fill(RColor.input(scheme))
+                                    .overlay(Capsule().stroke(RColor.border(scheme), lineWidth: 1)))
                             }
+                            .buttonStyle(.plain)
                         }
-                        .padding(12)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(RColor.input(scheme))
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(RColor.border(scheme), lineWidth: 1)))
-
-                        if inviteStatus == .notFound {
-                            Text("no user found with that handle")
-                                .font(RFont.mono(10)).foregroundColor(RColor.muted(scheme))
-                        } else if inviteStatus == .alreadyAdded {
-                            Text("already added")
-                                .font(RFont.mono(10)).foregroundColor(RColor.muted(scheme))
-                        }
-
-                        // Invited chips
-                        if !invitedProfiles.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 6) {
-                                    ForEach(invitedProfiles) { p in
-                                        HStack(spacing: 4) {
-                                            Text(p.handle)
-                                                .font(RFont.mono(10))
-                                                .foregroundColor(.white)
-                                            Button {
-                                                invitedProfiles.removeAll { $0.id == p.id }
-                                            } label: {
-                                                Image(systemName: "xmark")
-                                                    .font(.system(size: 8, weight: .bold))
-                                                    .foregroundColor(.white.opacity(0.8))
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 5)
-                                        .background(Capsule().fill(Color.rMint))
-                                    }
-                                }
-                            }
-                        }
-
-                        // Friends quick-add
-                        let uninvited: [FriendProfile] = friends.compactMap { f in
-                            guard let myId else { return nil }
-                            let other = f.otherUser(myId: myId)
-                            return invitedProfiles.contains(where: { $0.id == other.id }) ? nil : other
-                        }
-                        if !uninvited.isEmpty {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 6) {
-                                    ForEach(uninvited) { p in
-                                        Button { invitedProfiles.append(p) } label: {
-                                            HStack(spacing: 4) {
-                                                Text(p.handle).font(RFont.mono(10))
-                                                Image(systemName: "plus").font(.system(size: 9))
-                                            }
-                                            .foregroundColor(RColor.text(scheme))
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 5)
-                                            .background(Capsule().fill(RColor.input(scheme))
-                                                .overlay(Capsule().stroke(RColor.border(scheme), lineWidth: 1)))
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Button {
-                        Task { await create() }
-                    } label: {
-                        Group {
-                            if isSaving {
-                                ProgressView().progressViewStyle(.circular).scaleEffect(0.8)
-                            } else {
-                                Text("create shared memory")
-                                    .font(RFont.body(14).weight(.semibold))
-                                    .foregroundColor(.white)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(
-                            title.trimmingCharacters(in: .whitespaces).isEmpty ? Color.rMint.opacity(0.4) : Color.rMint
-                        ))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || isSaving)
-
-                    if let msg = errorMsg {
-                        Text(msg)
-                            .font(RFont.mono(10))
-                            .foregroundColor(.rOrange)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity)
                     }
                 }
-                .padding(24)
+            }
+
+            if let msg = errorMsg {
+                Text(msg).font(RFont.mono(10)).foregroundColor(.rOrange)
             }
         }
-        .frame(width: 420, height: 560)
-        .task {
-            friends = (try? await supabase.fetchFriends()) ?? []
+        .padding(20)
+        .frame(width: 300)
+        .task { await load() }
+    }
+
+    private func load() async {
+        async let f = supabase.fetchFriends()
+        friends = (try? await f) ?? []
+        if let eventId = collectiveEventId {
+            members = (try? await supabase.fetchEventMembers(eventId: eventId)) ?? []
         }
     }
 
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text)
-            .font(RFont.mono(10))
-            .foregroundColor(RColor.muted(scheme))
-            .textCase(.uppercase)
-            .tracking(2)
-    }
-
-    private func formatted(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .medium
-        return f.string(from: date)
-    }
-
-    private func searchAndInvite() async {
+    private func addByHandle() async {
         let query = inviteHandle.lowercased().trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return }
         inviteStatus = .searching
         if let found = try? await supabase.searchUser(username: query) {
-            if invitedProfiles.contains(where: { $0.id == found.id }) {
-                inviteStatus = .alreadyAdded
+            if members.contains(where: { $0.id == found.id }) {
+                inviteStatus = .alreadyMember
             } else {
-                invitedProfiles.append(found)
-                inviteHandle = ""
                 inviteStatus = .idle
+                inviteHandle = ""
+                await invite(profile: found)
             }
         } else {
             inviteStatus = .notFound
         }
     }
 
-    private func create() async {
-        let trimmed = title.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
+    private func invite(profile: FriendProfile) async {
         isSaving = true
         errorMsg = nil
         do {
-            let event = try await supabase.createCollectiveEvent(
-                title: trimmed,
-                date: eventDate,
-                friendIds: invitedProfiles.map { $0.id }
+            let eventId = try await supabase.shareNote(
+                noteId: noteId,
+                noteContent: noteContent,
+                notePreview: notePreview,
+                noteDateStr: noteDateStr,
+                addUserId: profile.id,
+                existingEventId: collectiveEventId
             )
-            onCreated(event)
-            dismiss()
+            collectiveEventId = eventId
+            members.append(profile)
         } catch {
-            print("createCollectiveEvent error:", error)
+            print("shareNote error:", error)
             errorMsg = error.localizedDescription
         }
         isSaving = false
