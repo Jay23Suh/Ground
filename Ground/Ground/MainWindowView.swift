@@ -1,5 +1,6 @@
 import SwiftUI
 import UserNotifications
+import Auth
 
 enum GroundTab {
     case home, history, notes, stats, abstract, chill, settings
@@ -124,6 +125,10 @@ struct MainWindowView: View {
         }
         .task { await loadEntries() }
         .task { await checkNotificationPrompt() }
+        .onChange(of: supabase.user?.id) { _ in
+            entries = []
+            Task { await loadEntries() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task {
                 await loadEntries()
