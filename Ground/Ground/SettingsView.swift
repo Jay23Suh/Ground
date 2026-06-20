@@ -266,6 +266,46 @@ struct SettingsView: View {
                     }
                 }
 
+                SettingsSection(title: "legal") {
+                    VStack(spacing: 8) {
+                        Link(destination: URL(string: "https://github.com/Jay23Suh/Ground/blob/main/Ground/PRIVACY_POLICY.md")!) {
+                            HStack {
+                                Text("privacy policy")
+                                    .font(RFont.body(13))
+                                    .foregroundColor(RColor.text(scheme))
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(RColor.muted(scheme))
+                            }
+                            .padding(14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12).fill(RColor.card(scheme))
+                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(RColor.border(scheme), lineWidth: 1))
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        Link(destination: URL(string: "https://github.com/Jay23Suh/Ground/blob/main/TERMS_OF_SERVICE.md")!) {
+                            HStack {
+                                Text("terms of service")
+                                    .font(RFont.body(13))
+                                    .foregroundColor(RColor.text(scheme))
+                                Spacer()
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(RColor.muted(scheme))
+                            }
+                            .padding(14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12).fill(RColor.card(scheme))
+                                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(RColor.border(scheme), lineWidth: 1))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
                 // Sign out + delete
                 SettingsSection(title: "session") {
                     VStack(spacing: 8) {

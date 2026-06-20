@@ -141,10 +141,11 @@ struct MainWindowView: View {
     }
 
     private func loadEntries() async {
+        let requestedUserId = supabase.user?.id
         loading = true
         do {
             let fetched = try await supabase.fetchEntries()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, supabase.user?.id == requestedUserId else { return }
             entries = fetched
             scheduleAbstractNotificationIfNeeded()
         } catch { }
