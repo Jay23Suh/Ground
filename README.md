@@ -9,7 +9,6 @@ A personal journaling and mindfulness app for macOS. Ground lives in your menu b
 - **Place labels** — automatically detected from your text using Apple's on-device Natural Language framework
 - **Collective memories** — invite a friend to write their own perspective on a shared experience, then reveal each other's entries together
 - **Friends** — find people by @username and manage connections
-- **Chill space** — ambient audio and daily inspirational quotes
 - **Stats** — a view of your journaling practice over time
 - **Abstract** — a visual review of your journey, unlocked after 10 entries
 

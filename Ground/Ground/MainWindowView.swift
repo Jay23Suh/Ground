@@ -51,7 +51,6 @@ struct MainWindowView: View {
                             NavTab(label: "memories", selected: tab == .notes,    badge: supabase.collectiveBadge > 0) { tab = .notes }
                             NavTab(label: "stats",    selected: tab == .stats)    { tab = .stats }
                             NavTab(label: "abstract", selected: tab == .abstract) { tab = .abstract }
-                            NavTab(label: "chill",    selected: tab == .chill)    { tab = .chill }
                             NavTab(label: "settings", selected: tab == .settings) { tab = .settings }
                         }
                         HStack(spacing: 1) {
@@ -60,7 +59,6 @@ struct MainWindowView: View {
                             NavTab(label: "memories", selected: tab == .notes,    compact: true, badge: supabase.collectiveBadge > 0) { tab = .notes }
                             NavTab(label: "stats",    selected: tab == .stats,    compact: true) { tab = .stats }
                             NavTab(label: "abstract", selected: tab == .abstract, compact: true) { tab = .abstract }
-                            NavTab(label: "chill",    selected: tab == .chill,    compact: true) { tab = .chill }
                             NavTab(label: "settings", selected: tab == .settings, compact: true) { tab = .settings }
                         }
                     }

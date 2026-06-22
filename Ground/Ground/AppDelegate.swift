@@ -59,7 +59,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         setupScheduler()
         let nc = NotificationCenter.default
         nc.addObserver(forName: .showJournalPopup, object: nil, queue: .main) { [weak self] _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { self?.showPopup() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self?.showPopup() }
         }
         nc.addObserver(forName: .showMainWindow,  object: nil, queue: .main) { [weak self] _ in self?.showMain() }
         nc.addObserver(forName: .showSetupWindow, object: nil, queue: .main) { [weak self] _ in self?.showSetup() }
@@ -159,8 +159,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     func showPopup() {
         PopupState.shared.refresh()
         if let w = popupWindow {
+            w.center()
             w.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            NotificationCenter.default.post(name: .prepareJournalPopup, object: nil)
             return
         }
         let view = JournalPopupView { [weak self] in
@@ -185,6 +187,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         popupWindow = w
+        NotificationCenter.default.post(name: .prepareJournalPopup, object: nil)
     }
 
     func showMain() {

@@ -124,6 +124,14 @@ struct JournalPopupView: View {
             supabase.errorMessage = nil
             focused = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .prepareJournalPopup)) { _ in
+            answer = ""
+            isSaving = false
+            supabase.errorMessage = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                focused = true
+            }
+        }
     }
 
     private func handleSave() async {

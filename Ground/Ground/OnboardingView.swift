@@ -68,8 +68,8 @@ struct OnboardingView: View {
             .padding(32)
         }
         .frame(width: 460, height: 540)
-        .onAppear {
-            if supabase.user != nil { onComplete?() }
+        .onReceive(supabase.$user) { user in
+            if user != nil { onComplete?() }
         }
         .overlay {
             if showingIntro {
