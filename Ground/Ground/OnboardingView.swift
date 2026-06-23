@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 struct OnboardingView: View {
     var onComplete: (() -> Void)? = nil
@@ -9,7 +10,9 @@ struct OnboardingView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var errorMsg = ""
+    @State private var isSubmitting = false
     @State private var showingIntro = false
+    @State private var showingNotificationPrompt = false
 
     var body: some View {
         ZStack {
@@ -69,11 +72,14 @@ struct OnboardingView: View {
         }
         .frame(width: 460, height: 540)
         .onReceive(supabase.$user) { user in
-            if user != nil { onComplete?() }
+            if user != nil && !isSubmitting { onComplete?() }
         }
         .overlay {
-            if showingIntro {
-                IntroOverlay { onComplete?() }
+            if showingNotificationPrompt {
+                NotificationPromptView { finishOnboarding() }
+                    .transition(.opacity)
+            } else if showingIntro {
+                IntroOverlay { Task { await proceedToNotificationPrompt() } }
                     .transition(.opacity)
             }
         }
@@ -81,6 +87,8 @@ struct OnboardingView: View {
 
     private func handleSubmit() async {
         errorMsg = ""
+        isSubmitting = true
+        defer { isSubmitting = false }
         do {
             if isLogin {
                 try await supabase.signIn(email: email, password: password)
@@ -91,5 +99,22 @@ struct OnboardingView: View {
         } catch {
             errorMsg = error.localizedDescription
         }
+    }
+
+    private func proceedToNotificationPrompt() async {
+        let alreadyPrompted = UserDefaults.standard.bool(forKey: "ground.notificationPromptShown")
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard !alreadyPrompted, settings.authorizationStatus == .notDetermined else {
+            finishOnboarding()
+            return
+        }
+        withAnimation(.easeInOut(duration: 0.4)) { showingNotificationPrompt = true }
+    }
+
+    private func finishOnboarding() {
+        UserDefaults.standard.set(true, forKey: "ground.notificationPromptShown")
+        onComplete?()
+        showingIntro = false
+        showingNotificationPrompt = false
     }
 }

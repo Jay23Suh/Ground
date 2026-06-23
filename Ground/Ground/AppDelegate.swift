@@ -65,8 +65,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         nc.addObserver(forName: .showSetupWindow, object: nil, queue: .main) { [weak self] _ in self?.showSetup() }
         nc.addObserver(forName: .didJournal,      object: nil, queue: .main) { [weak self] _ in self?.activeSeconds = 0 }
 
-        showOnboarding()
+        Task { @MainActor in
+            await SupabaseManager.shared.waitForSessionRestore()
+            if SupabaseManager.shared.user == nil {
+                showOnboarding()
+            }
+            observeAuthState()
+        }
         checkDailyQuote()
+    }
+
+    // Once signed in, react to a later sign-out (from Settings) by tearing
+    // down the signed-in windows and bringing the onboarding window back.
+    private func observeAuthState() {
+        SupabaseManager.shared.$user
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] user in
+                guard user == nil else { return }
+                self?.handleSignedOut()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func handleSignedOut() {
+        mainWindow?.orderOut(nil)
+        setupWindow?.orderOut(nil)
+        popupWindow?.orderOut(nil)
+        showOnboarding()
     }
 
     // MARK: - UNUserNotificationCenterDelegate
@@ -247,6 +273,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         w.contentViewController = NSHostingController(
             rootView: OnboardingView(onComplete: { [weak self] in
                 self?.onboardingWindow?.orderOut(nil)
+                self?.showMain()
             }).environmentObject(SupabaseManager.shared)
         )
         w.center()

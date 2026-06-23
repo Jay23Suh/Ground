@@ -47,8 +47,14 @@ class SupabaseManager: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
 
+    private var sessionRestoreTask: Task<Void, Never>?
+
     private init() {
-        Task { await restoreSession() }
+        sessionRestoreTask = Task { await restoreSession() }
+    }
+
+    func waitForSessionRestore() async {
+        await sessionRestoreTask?.value
     }
 
     func restoreSession() async {
@@ -250,7 +256,7 @@ class SupabaseManager: ObservableObject {
             .execute()
     }
 
-    func shareNote(noteId: UUID, noteContent: String, notePreview: String,
+    func shareNote(noteId: UUID, noteContent: String, title: String,
                    noteDateStr: String?, addUserId: UUID, existingEventId: UUID?) async throws -> UUID {
         guard let uid = user?.id else { throw SupabaseManagerError.notSignedIn }
         let now = SupabaseManager.isoFormatter.string(from: Date())
@@ -266,7 +272,7 @@ class SupabaseManager: ObservableObject {
                 let created_by: String; let created_at: String
             }
             try await client.from("collective_events")
-                .insert(EventInsert(id: eventId.uuidString, title: notePreview,
+                .insert(EventInsert(id: eventId.uuidString, title: title,
                                     event_date: noteDateStr, created_by: uid.uuidString, created_at: now))
                 .execute()
 
@@ -590,11 +596,14 @@ class SupabaseManager: ObservableObject {
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastCheckKey)
 
         let events = (try? await fetchCollectiveEvents()) ?? []
+        NSLog("DIAG checkForNewCollectivePerspectives events.count=\(events.count)")
         guard !events.isEmpty else { return }
 
         var newCount = 0
         for event in events {
+            let t0 = Date()
             let perspectives = (try? await fetchCollectivePerspectives(eventId: event.id)) ?? []
+            NSLog("DIAG  perspectives for event \(event.id) took \(Date().timeIntervalSince(t0))s, count=\(perspectives.count)")
             let newOnes = perspectives.filter {
                 $0.user_id != uid && $0.submitted && parseISO($0.updated_at) > lastCheck
             }

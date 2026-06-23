@@ -128,26 +128,36 @@ struct MainWindowView: View {
             Task { await loadEntries() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            NSLog("DIAG didBecomeActive fired")
             Task {
-                await loadEntries()
+                await loadEntries(showSpinner: false)
+                NSLog("DIAG checkForNewCollectivePerspectives starting")
                 await supabase.checkForNewCollectivePerspectives()
+                NSLog("DIAG checkForNewCollectivePerspectives done")
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .didJournal)) { _ in
-            Task { await loadEntries() }
+            Task { await loadEntries(showSpinner: false) }
         }
     }
 
-    private func loadEntries() async {
+    private func loadEntries(showSpinner: Bool = true) async {
         let requestedUserId = supabase.user?.id
-        loading = true
+        NSLog("DIAG loadEntries start showSpinner=\(showSpinner) loading=\(loading)")
+        if showSpinner { loading = true }
         do {
             let fetched = try await supabase.fetchEntries()
-            guard !Task.isCancelled, supabase.user?.id == requestedUserId else { return }
+            guard !Task.isCancelled, supabase.user?.id == requestedUserId else {
+                NSLog("DIAG loadEntries cancelled/stale, returning early, loading=\(loading)")
+                return
+            }
             entries = fetched
             scheduleAbstractNotificationIfNeeded()
-        } catch { }
-        loading = false
+        } catch {
+            NSLog("DIAG loadEntries error: \(error)")
+        }
+        if showSpinner { loading = false }
+        NSLog("DIAG loadEntries end loading=\(loading)")
     }
 
     private func checkNotificationPrompt() async {

@@ -104,6 +104,7 @@ struct NotesView: View {
     @State private var searchDebounceTask: Task<Void, Never>?
 
     @State private var selectedCollectiveEvent: CollectiveEvent?
+    @State private var collectiveEvents: [CollectiveEvent] = []
 
     @State private var visibleYears: Set<String> = []
     @State private var visibleMonthKeys: Set<String> = []
@@ -145,6 +146,31 @@ struct NotesView: View {
         return result
     }
 
+    private var filteredCollectiveEvents: [CollectiveEvent] {
+        let q = debouncedSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return collectiveEvents }
+        let parsed = parseSearchQuery(q)
+        return collectiveEvents.filter { event in
+            if let kw = parsed.keyword, !event.title.lowercased().contains(kw.lowercased()) { return false }
+            if let y = parsed.year, eventDateParts(event)?.year != y { return false }
+            if let m = parsed.month, eventDateParts(event)?.month != m { return false }
+            return true
+        }
+    }
+
+    private func eventDateParts(_ event: CollectiveEvent) -> (year: Int, month: Int)? {
+        guard let ds = event.event_date else { return nil }
+        let parts = ds.split(separator: "-")
+        guard parts.count == 3, let y = Int(parts[0]), let m = Int(parts[1]) else { return nil }
+        return (y, m)
+    }
+
+    private var sectionDivider: some View {
+        Rectangle()
+            .fill(RColor.border(scheme))
+            .frame(height: 1.5)
+    }
+
     private func parseSearchQuery(_ raw: String) -> (keyword: String?, year: Int?, month: Int?) {
         let monthMap: [String: Int] = [
             "january":1,"february":2,"march":3,"april":4,"may":5,"june":6,
@@ -175,6 +201,7 @@ struct NotesView: View {
                         } else {
                             notes.insert(updated, at: 0)
                         }
+                        Task { await reloadCollectiveEvents() }
                     case .deleted:
                         notes.removeAll { $0.id == note.id }
                     }
@@ -213,7 +240,7 @@ struct NotesView: View {
             .padding(.horizontal, 32)
             .padding(.vertical, 20)
 
-            Divider().opacity(0.4)
+            sectionDivider
 
             SearchBar(text: $searchText, placeholder: "search by keyword, year, or month…")
                 .padding(.horizontal, 32)
@@ -246,12 +273,15 @@ struct NotesView: View {
                     .padding(.horizontal, 32)
                     .padding(.vertical, 12)
                 }
-                Divider().opacity(0.4)
+                sectionDivider
             }
 
-            if !sharedNotes.isEmpty {
-                collectiveSection
-                Divider().opacity(0.4)
+            if !filteredCollectiveEvents.isEmpty {
+                ScrollView {
+                    collectiveSection
+                }
+                .frame(maxHeight: 320)
+                sectionDivider
             }
 
             if loading {
@@ -341,6 +371,11 @@ struct NotesView: View {
                                         NoteRow(note: note, scheme: scheme) {
                                             editingNote = note
                                         }
+                                        .contextMenu {
+                                            Button("delete", role: .destructive) {
+                                                Task { await deleteNote(note) }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -364,8 +399,6 @@ struct NotesView: View {
         .onAppear { supabase.collectiveBadge = 0 }
     }
 
-    private var sharedNotes: [Note] { notes.filter { $0.collective_event_id != nil } }
-
     private var collectiveSection: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("shared")
@@ -377,18 +410,18 @@ struct NotesView: View {
                 .padding(.top, 16)
                 .padding(.bottom, 8)
 
-            ForEach(sharedNotes) { note in
+            ForEach(filteredCollectiveEvents) { event in
                 HStack(spacing: 12) {
                     Image(systemName: "person.2.fill")
                         .font(.system(size: 11))
                         .foregroundColor(.rMint)
                         .frame(width: 20)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(note.preview)
+                        Text(event.title)
                             .font(RFont.body(14))
                             .foregroundColor(RColor.text(scheme))
-                        if let meta = note.displayMeta {
-                            Text(meta)
+                        if let date = event.displayDate {
+                            Text(date)
                                 .font(RFont.mono(10))
                                 .foregroundColor(RColor.muted(scheme))
                         }
@@ -403,26 +436,31 @@ struct NotesView: View {
                 .contentShape(Rectangle())
                 .overlay(Divider().opacity(0.2), alignment: .bottom)
                 .onTapGesture {
-                    guard let eventId = note.collective_event_id else { return }
-                    let dateStr: String? = {
-                        guard let y = note.year, let m = note.month, let d = note.day else { return nil }
-                        return String(format: "%04d-%02d-%02d", y, m, d)
-                    }()
-                    selectedCollectiveEvent = CollectiveEvent(
-                        id: eventId, title: note.preview,
-                        event_date: dateStr,
-                        created_by: UUID(), created_at: note.created_at
-                    )
+                    selectedCollectiveEvent = event
                 }
             }
         }
     }
 
     private func loadNotes() async {
+        NSLog("DIAG NotesView.loadNotes start")
         loading = true
         notes = (try? await supabase.fetchNotes()) ?? []
         loading = false
+        NSLog("DIAG NotesView.loadNotes end, count=\(notes.count)")
         Task { await supabase.backfillPlaces(in: notes) }
+        Task { await reloadCollectiveEvents() }
+    }
+
+    private func reloadCollectiveEvents() async {
+        NSLog("DIAG reloadCollectiveEvents start")
+        collectiveEvents = (try? await supabase.fetchCollectiveEvents()) ?? []
+        NSLog("DIAG reloadCollectiveEvents end, count=\(collectiveEvents.count)")
+    }
+
+    private func deleteNote(_ note: Note) async {
+        try? await supabase.deleteNote(id: note.id)
+        notes.removeAll { $0.id == note.id }
     }
 
     private func newNote() async {
@@ -672,7 +710,6 @@ struct NoteEditorView: View {
                     NoteInvitePopover(
                         noteId: original.id,
                         noteContent: content,
-                        notePreview: original.preview,
                         noteDateStr: {
                             guard let y = Int(yearText), let m = month, let d = day else { return nil }
                             return String(format: "%04d-%02d-%02d", y, m, d)
@@ -936,11 +973,11 @@ struct NoteInvitePopover: View {
 
     let noteId: UUID
     let noteContent: String
-    let notePreview: String
     let noteDateStr: String?
     @Binding var collectiveEventId: UUID?
     @Environment(\.dismiss) var dismiss
 
+    @State private var eventTitle = ""
     @State private var friends: [FriendshipRow] = []
     @State private var members: [FriendProfile] = []
     @State private var inviteHandle = ""
@@ -949,6 +986,8 @@ struct NoteInvitePopover: View {
     @State private var errorMsg: String?
 
     private var myId: UUID? { supabase.user?.id }
+    private var titleIsValid: Bool { !eventTitle.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var canInvite: Bool { collectiveEventId != nil || titleIsValid }
 
     enum InviteStatus: Equatable { case idle, searching, notFound, alreadyMember }
 
@@ -959,6 +998,21 @@ struct NoteInvitePopover: View {
                 .foregroundColor(RColor.muted(scheme))
                 .tracking(3)
                 .textCase(.uppercase)
+
+            if collectiveEventId == nil {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("what's this memory about?")
+                        .font(RFont.mono(10))
+                        .foregroundColor(RColor.muted(scheme))
+                    TextField("e.g. mom's 60th birthday", text: $eventTitle)
+                        .textFieldStyle(.plain)
+                        .font(RFont.body(14))
+                        .foregroundColor(RColor.text(scheme))
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(RColor.input(scheme))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(RColor.border(scheme), lineWidth: 1)))
+                }
+            }
 
             // Current members
             if !members.isEmpty {
@@ -999,14 +1053,17 @@ struct NoteInvitePopover: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .background(Capsule().fill(Color.rBlue))
-                        .disabled(inviteHandle.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(inviteHandle.trimmingCharacters(in: .whitespaces).isEmpty || !canInvite)
                 }
             }
             .padding(12)
             .background(RoundedRectangle(cornerRadius: 10).fill(RColor.input(scheme))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(RColor.border(scheme), lineWidth: 1)))
 
-            if inviteStatus == .notFound {
+            if collectiveEventId == nil && !titleIsValid {
+                Text("give this memory a title before sharing")
+                    .font(RFont.mono(10)).foregroundColor(RColor.muted(scheme))
+            } else if inviteStatus == .notFound {
                 Text("no user found with that handle")
                     .font(RFont.mono(10)).foregroundColor(RColor.muted(scheme))
             } else if inviteStatus == .alreadyMember {
@@ -1036,6 +1093,8 @@ struct NoteInvitePopover: View {
                                     .overlay(Capsule().stroke(RColor.border(scheme), lineWidth: 1)))
                             }
                             .buttonStyle(.plain)
+                            .disabled(!canInvite)
+                            .opacity(canInvite ? 1 : 0.4)
                         }
                     }
                 }
@@ -1060,7 +1119,7 @@ struct NoteInvitePopover: View {
 
     private func addByHandle() async {
         let query = inviteHandle.lowercased().trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return }
+        guard !query.isEmpty, canInvite else { return }
         inviteStatus = .searching
         if let found = try? await supabase.searchUser(username: query) {
             if members.contains(where: { $0.id == found.id }) {
@@ -1076,13 +1135,17 @@ struct NoteInvitePopover: View {
     }
 
     private func invite(profile: FriendProfile) async {
+        guard canInvite else {
+            errorMsg = "give this memory a title before sharing"
+            return
+        }
         isSaving = true
         errorMsg = nil
         do {
             let eventId = try await supabase.shareNote(
                 noteId: noteId,
                 noteContent: noteContent,
-                notePreview: notePreview,
+                title: eventTitle.trimmingCharacters(in: .whitespaces),
                 noteDateStr: noteDateStr,
                 addUserId: profile.id,
                 existingEventId: collectiveEventId
