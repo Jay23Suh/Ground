@@ -14,9 +14,18 @@ struct CollectiveEventDetailView: View {
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var saveTask: Task<Void, Never>?
+    @State private var showPlacePicker = false
     @FocusState private var editorFocused: Bool
 
     private var myId: UUID? { supabase.user?.id }
+
+    // Place is local-only (per-person, never synced) — see SupabaseManager.setCollectivePlace.
+    private var placeBinding: Binding<String?> {
+        Binding(
+            get: { supabase.collectiveLocalPlaces[event.id] },
+            set: { supabase.setCollectivePlace(event.id, place: $0) }
+        )
+    }
 
     private var submittedCount: Int { allPerspectives.filter { $0.submitted }.count }
 
@@ -71,14 +80,30 @@ struct CollectiveEventDetailView: View {
                     VStack(alignment: .leading, spacing: 0) {
 
                         // Event title + date
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 8) {
                             Text(event.title)
                                 .font(RFont.header(24))
                                 .foregroundColor(RColor.text(scheme))
-                            if let date = event.displayDate {
-                                Text(date)
-                                    .font(RFont.mono(11))
-                                    .foregroundColor(RColor.muted(scheme))
+                            HStack(spacing: 8) {
+                                if let date = event.displayDate {
+                                    Text(date)
+                                        .font(RFont.mono(11))
+                                        .foregroundColor(RColor.muted(scheme))
+                                }
+                                Button { showPlacePicker.toggle() } label: {
+                                    Text(placeBinding.wrappedValue ?? "set place")
+                                        .font(RFont.mono(10))
+                                        .foregroundColor(placeBinding.wrappedValue != nil ? .rMint : RColor.muted(scheme))
+                                        .tracking(1)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 4)
+                                        .background(RoundedRectangle(cornerRadius: 6).fill(RColor.card(scheme))
+                                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(RColor.border(scheme), lineWidth: 1)))
+                                }
+                                .buttonStyle(.plain)
+                                .popover(isPresented: $showPlacePicker, arrowEdge: .bottom) {
+                                    PlacePickerPopover(place: placeBinding) {}
+                                }
                             }
                         }
                         .padding(.horizontal, 32)

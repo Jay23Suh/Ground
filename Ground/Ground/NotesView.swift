@@ -1,12 +1,58 @@
 import SwiftUI
 import Auth
 
+// MARK: - MemoryItem (unifies personal notes and shared memories into one timeline)
+
+private enum MemoryItem: Identifiable {
+    case note(Note)
+    case shared(CollectiveEvent)
+
+    var id: String {
+        switch self {
+        case .note(let n):   return "n-\(n.id.uuidString)"
+        case .shared(let e): return "s-\(e.id.uuidString)"
+        }
+    }
+
+    private static func dateParts(_ ds: String?) -> (year: Int?, month: Int?, day: Int?) {
+        guard let ds else { return (nil, nil, nil) }
+        let parts = ds.split(separator: "-")
+        guard parts.count == 3, let y = Int(parts[0]), let m = Int(parts[1]), let d = Int(parts[2]) else {
+            return (nil, nil, nil)
+        }
+        return (y, m, d)
+    }
+
+    var year: Int? {
+        switch self {
+        case .note(let n):   return n.year
+        case .shared(let e): return Self.dateParts(e.event_date).year
+        }
+    }
+
+    var month: Int? {
+        switch self {
+        case .note(let n):   return n.month
+        case .shared(let e): return Self.dateParts(e.event_date).month
+        }
+    }
+
+    var sortKey: Int {
+        let parts: (year: Int?, month: Int?, day: Int?)
+        switch self {
+        case .note(let n):   parts = (n.year, n.month, n.day)
+        case .shared(let e): parts = Self.dateParts(e.event_date)
+        }
+        return (parts.year ?? 0) * 10000 + (parts.month ?? 0) * 100 + (parts.day ?? 0)
+    }
+}
+
 // MARK: - Grouping helpers
 
 private struct MonthGroup: Identifiable {
     let id: String
     let monthLabel: String?
-    let notes: [Note]
+    let items: [MemoryItem]
 }
 
 private struct YearGroup: Identifiable {
@@ -15,33 +61,33 @@ private struct YearGroup: Identifiable {
     let monthGroups: [MonthGroup]
 }
 
-private func groupNotes(_ notes: [Note]) -> [YearGroup] {
-    let sorted = notes.sorted { $0.sortKey > $1.sortKey }
+private func groupItems(_ items: [MemoryItem]) -> [YearGroup] {
+    let sorted = items.sorted { $0.sortKey > $1.sortKey }
 
-    var byYear: [String: [Note]] = [:]
-    for note in sorted {
-        let key = note.year.map { "\($0)" } ?? "undated"
-        byYear[key, default: []].append(note)
+    var byYear: [String: [MemoryItem]] = [:]
+    for item in sorted {
+        let key = item.year.map { "\($0)" } ?? "undated"
+        byYear[key, default: []].append(item)
     }
 
     let cal = Calendar.current
     let monthSymbols = cal.shortMonthSymbols
 
-    func monthGroups(for notes: [Note]) -> [MonthGroup] {
-        var byMonth: [Int: [Note]] = [:]
-        var noMonth: [Note] = []
-        for note in notes {
-            if let m = note.month { byMonth[m, default: []].append(note) }
-            else { noMonth.append(note) }
+    func monthGroups(for items: [MemoryItem]) -> [MonthGroup] {
+        var byMonth: [Int: [MemoryItem]] = [:]
+        var noMonth: [MemoryItem] = []
+        for item in items {
+            if let m = item.month { byMonth[m, default: []].append(item) }
+            else { noMonth.append(item) }
         }
         var groups: [MonthGroup] = []
         for m in stride(from: 12, through: 1, by: -1) {
-            if let ns = byMonth[m] {
-                groups.append(MonthGroup(id: "\(m)", monthLabel: monthSymbols[m - 1], notes: ns))
+            if let its = byMonth[m] {
+                groups.append(MonthGroup(id: "\(m)", monthLabel: monthSymbols[m - 1], items: its))
             }
         }
         if !noMonth.isEmpty {
-            groups.append(MonthGroup(id: "none", monthLabel: nil, notes: noMonth))
+            groups.append(MonthGroup(id: "none", monthLabel: nil, items: noMonth))
         }
         return groups
     }
@@ -62,13 +108,13 @@ private func groupNotes(_ notes: [Note]) -> [YearGroup] {
 private enum FlatSection: Identifiable {
     case yearHeader(YearGroup)
     case monthHeader(yearId: String, MonthGroup)
-    case noteItem(yearId: String, monthId: String, Note)
+    case memoryItem(yearId: String, monthId: String, MemoryItem)
 
     var id: String {
         switch self {
         case .yearHeader(let g):             return "y-\(g.id)"
         case .monthHeader(let y, let m):     return "m-\(y)-\(m.id)"
-        case .noteItem(let y, let m, let n): return "n-\(y)-\(m)-\(n.id.uuidString)"
+        case .memoryItem(let y, let m, let i): return "i-\(y)-\(m)-\(i.id)"
         }
     }
 }
@@ -81,8 +127,8 @@ private func flatSections(from groups: [YearGroup]) -> [FlatSection] {
             if mGroup.monthLabel != nil {
                 result.append(.monthHeader(yearId: group.id, mGroup))
             }
-            for note in mGroup.notes {
-                result.append(.noteItem(yearId: group.id, monthId: mGroup.id, note))
+            for item in mGroup.items {
+                result.append(.memoryItem(yearId: group.id, monthId: mGroup.id, item))
             }
         }
     }
@@ -105,10 +151,13 @@ struct NotesView: View {
 
     @State private var selectedCollectiveEvent: CollectiveEvent?
     @State private var collectiveEvents: [CollectiveEvent] = []
+    @State private var collectiveActivity: [UUID: Date] = [:]
 
     @State private var visibleYears: Set<String> = []
     @State private var visibleMonthKeys: Set<String> = []
     @State private var drillYear: String? = nil
+
+    private var myId: UUID? { supabase.user?.id }
 
     private var activeYear: String? {
         visibleYears.compactMap { Int($0) }.max().map { String($0) }
@@ -125,44 +174,71 @@ struct NotesView: View {
             .0
     }
 
+    // All items, deduped: a note that's been shared is represented once, as its CollectiveEvent.
+    private var allItems: [MemoryItem] {
+        notes.filter { $0.collective_event_id == nil }.map(MemoryItem.note)
+            + collectiveEvents.map(MemoryItem.shared)
+    }
+
     private var datedGroups: [YearGroup] {
-        groupNotes(notes).filter { $0.id != "undated" }
+        groupItems(allItems).filter { $0.id != "undated" }
+    }
+
+    // A note's place is its own field; a shared memory's place is local-only
+    // (per-person, never synced) so it never reaches other members.
+    private func place(for item: MemoryItem) -> String? {
+        switch item {
+        case .note(let n):   return n.place
+        case .shared(let e): return supabase.collectiveLocalPlaces[e.id]
+        }
     }
 
     private var places: [String] {
-        Array(Set(notes.compactMap { $0.place })).sorted()
+        Array(Set(allItems.compactMap(place(for:)))).sorted()
     }
 
-    private var filteredNotes: [Note] {
-        var result = selectedPlace == nil ? notes : notes.filter { $0.place == selectedPlace }
+    private var filteredItems: [MemoryItem] {
+        var result = selectedPlace == nil ? allItems : allItems.filter { place(for: $0) == selectedPlace }
         let q = debouncedSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return result }
         let parsed = parseSearchQuery(q)
         if let kw = parsed.keyword {
-            result = result.filter { $0.content.lowercased().contains(kw.lowercased()) }
+            result = result.filter { item in
+                switch item {
+                case .note(let n):   return n.content.lowercased().contains(kw.lowercased())
+                case .shared(let e): return e.title.lowercased().contains(kw.lowercased())
+                }
+            }
         }
         if let y = parsed.year  { result = result.filter { $0.year  == y } }
         if let m = parsed.month { result = result.filter { $0.month == m } }
         return result
     }
 
-    private var filteredCollectiveEvents: [CollectiveEvent] {
-        let q = debouncedSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return collectiveEvents }
-        let parsed = parseSearchQuery(q)
-        return collectiveEvents.filter { event in
-            if let kw = parsed.keyword, !event.title.lowercased().contains(kw.lowercased()) { return false }
-            if let y = parsed.year, eventDateParts(event)?.year != y { return false }
-            if let m = parsed.month, eventDateParts(event)?.month != m { return false }
-            return true
-        }
+    private func activityDate(_ event: CollectiveEvent) -> Date {
+        collectiveActivity[event.id] ?? supabase.parseISO(event.created_at)
     }
 
-    private func eventDateParts(_ event: CollectiveEvent) -> (year: Int, month: Int)? {
-        guard let ds = event.event_date else { return nil }
-        let parts = ds.split(separator: "-")
-        guard parts.count == 3, let y = Int(parts[0]), let m = Int(parts[1]) else { return nil }
-        return (y, m)
+    private func isUnread(_ event: CollectiveEvent) -> Bool {
+        let defaultSeen = event.created_by == myId ? supabase.parseISO(event.created_at) : Date.distantPast
+        let lastSeen = supabase.collectiveSeenAt[event.id] ?? defaultSeen
+        return activityDate(event) > lastSeen
+    }
+
+    // Shared memories with unseen activity float to the top, above the dated timeline.
+    private var unreadSharedItems: [MemoryItem] {
+        filteredItems
+            .compactMap { item -> (MemoryItem, CollectiveEvent)? in
+                guard case .shared(let e) = item, isUnread(e) else { return nil }
+                return (item, e)
+            }
+            .sorted { activityDate($0.1) > activityDate($1.1) }
+            .map { $0.0 }
+    }
+
+    private var remainingItems: [MemoryItem] {
+        let pinnedIds = Set(unreadSharedItems.map { $0.id })
+        return filteredItems.filter { !pinnedIds.contains($0.id) }
     }
 
     private var sectionDivider: some View {
@@ -276,19 +352,11 @@ struct NotesView: View {
                 sectionDivider
             }
 
-            if !filteredCollectiveEvents.isEmpty {
-                ScrollView {
-                    collectiveSection
-                }
-                .frame(maxHeight: 320)
-                sectionDivider
-            }
-
             if loading {
                 Spacer()
                 ProgressView().progressViewStyle(.circular).frame(maxWidth: .infinity)
                 Spacer()
-            } else if notes.isEmpty {
+            } else if allItems.isEmpty {
                 Spacer()
                 VStack(spacing: 10) {
                     Text("no memories yet")
@@ -312,7 +380,7 @@ struct NotesView: View {
                 }
                 .frame(maxWidth: .infinity)
                 Spacer()
-            } else if filteredNotes.isEmpty {
+            } else if filteredItems.isEmpty {
                 Spacer()
                 VStack(spacing: 6) {
                     Text("no memories found")
@@ -329,7 +397,17 @@ struct NotesView: View {
                     VStack(spacing: 0) {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
-                                ForEach(flatSections(from: groupNotes(filteredNotes))) { section in
+                                ForEach(unreadSharedItems) { item in
+                                    if case .shared(let event) = item {
+                                        SharedMemoryRow(event: event, scheme: scheme,
+                                                         place: supabase.collectiveLocalPlaces[event.id], isNew: true) {
+                                            supabase.markCollectiveSeen(event.id)
+                                            selectedCollectiveEvent = event
+                                        }
+                                    }
+                                }
+
+                                ForEach(flatSections(from: groupItems(remainingItems))) { section in
                                     switch section {
                                     case .yearHeader(let yearGroup):
                                         Text(yearGroup.yearLabel)
@@ -337,7 +415,7 @@ struct NotesView: View {
                                             .foregroundColor(RColor.muted(scheme))
                                             .tracking(3)
                                             .textCase(.uppercase)
-                                            .padding(.horizontal, 32)
+                                            .padding(.horizontal, 24)
                                             .padding(.top, 28)
                                             .padding(.bottom, 8)
                                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -355,7 +433,7 @@ struct NotesView: View {
                                         Text(mGroup.monthLabel ?? "")
                                             .font(RFont.body(11).italic())
                                             .foregroundColor(RColor.muted(scheme).opacity(0.65))
-                                            .padding(.horizontal, 32)
+                                            .padding(.horizontal, 24)
                                             .padding(.bottom, 4)
                                             .padding(.top, 8)
                                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -367,13 +445,22 @@ struct NotesView: View {
                                                 visibleMonthKeys.remove("\(yearId)-\(mGroup.id)")
                                             }
 
-                                    case .noteItem(_, _, let note):
-                                        NoteRow(note: note, scheme: scheme) {
-                                            editingNote = note
-                                        }
-                                        .contextMenu {
-                                            Button("delete", role: .destructive) {
-                                                Task { await deleteNote(note) }
+                                    case .memoryItem(_, _, let item):
+                                        switch item {
+                                        case .note(let note):
+                                            NoteRow(note: note, scheme: scheme) {
+                                                editingNote = note
+                                            }
+                                            .contextMenu {
+                                                Button("delete", role: .destructive) {
+                                                    Task { await deleteNote(note) }
+                                                }
+                                            }
+                                        case .shared(let event):
+                                            SharedMemoryRow(event: event, scheme: scheme,
+                                                             place: supabase.collectiveLocalPlaces[event.id]) {
+                                                supabase.markCollectiveSeen(event.id)
+                                                selectedCollectiveEvent = event
                                             }
                                         }
                                     }
@@ -399,49 +486,6 @@ struct NotesView: View {
         .onAppear { supabase.collectiveBadge = 0 }
     }
 
-    private var collectiveSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("shared")
-                .font(RFont.mono(10))
-                .foregroundColor(RColor.muted(scheme))
-                .tracking(3)
-                .textCase(.uppercase)
-                .padding(.horizontal, 32)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
-
-            ForEach(filteredCollectiveEvents) { event in
-                HStack(spacing: 12) {
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: 11))
-                        .foregroundColor(.rMint)
-                        .frame(width: 20)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(event.title)
-                            .font(RFont.body(14))
-                            .foregroundColor(RColor.text(scheme))
-                        if let date = event.displayDate {
-                            Text(date)
-                                .font(RFont.mono(10))
-                                .foregroundColor(RColor.muted(scheme))
-                        }
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10))
-                        .foregroundColor(RColor.muted(scheme).opacity(0.4))
-                }
-                .padding(.horizontal, 32)
-                .padding(.vertical, 13)
-                .contentShape(Rectangle())
-                .overlay(Divider().opacity(0.2), alignment: .bottom)
-                .onTapGesture {
-                    selectedCollectiveEvent = event
-                }
-            }
-        }
-    }
-
     private func loadNotes() async {
         NSLog("DIAG NotesView.loadNotes start")
         loading = true
@@ -454,8 +498,10 @@ struct NotesView: View {
 
     private func reloadCollectiveEvents() async {
         NSLog("DIAG reloadCollectiveEvents start")
-        collectiveEvents = (try? await supabase.fetchCollectiveEvents()) ?? []
-        NSLog("DIAG reloadCollectiveEvents end, count=\(collectiveEvents.count)")
+        let events = (try? await supabase.fetchCollectiveEvents()) ?? []
+        collectiveEvents = events
+        NSLog("DIAG reloadCollectiveEvents end, count=\(events.count)")
+        collectiveActivity = await supabase.fetchCollectiveActivity(events: events)
     }
 
     private func deleteNote(_ note: Note) async {
@@ -561,6 +607,40 @@ private struct MemoryTimelineStrip: View {
     }
 }
 
+// MARK: - MemoryCard (shared floating-card chrome for NoteRow / SharedMemoryRow)
+
+private struct MemoryCardChrome: ViewModifier {
+    let scheme: ColorScheme
+    var borderColor: Color? = nil
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(RColor.card(scheme))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(borderColor ?? RColor.border(scheme), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(scheme == .dark ? 0.22 : 0.05), radius: 6, x: 0, y: 2)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 5)
+    }
+}
+
+private extension View {
+    // Padding + contentShape must live on the button's label (not wrapped on
+    // afterward) so the whole padded area is actually clickable, not just the
+    // intrinsic size of the inner HStack content.
+    func memoryCardLabel() -> some View {
+        self
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .contentShape(Rectangle())
+    }
+}
+
 // MARK: - NoteRow
 
 struct NoteRow: View {
@@ -588,12 +668,68 @@ struct NoteRow: View {
                     .font(.system(size: 10))
                     .foregroundColor(RColor.muted(scheme).opacity(0.4))
             }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 14)
-            .contentShape(Rectangle())
+            .memoryCardLabel()
         }
         .buttonStyle(.plain)
-        .overlay(Divider().opacity(0.25), alignment: .bottom)
+        .modifier(MemoryCardChrome(scheme: scheme))
+    }
+}
+
+// MARK: - SharedMemoryRow
+
+private struct SharedMemoryRow: View {
+    let event: CollectiveEvent
+    let scheme: ColorScheme
+    var place: String? = nil
+    var isNew: Bool = false
+    let onTap: () -> Void
+
+    private var displayMeta: String? {
+        switch (event.displayDate, place) {
+        case (let d?, let p?): return "\(d) · \(p)"
+        case (let d?, nil):    return d
+        case (nil, let p?):    return p
+        case (nil, nil):       return nil
+        }
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(alignment: .top, spacing: 12) {
+                ZStack {
+                    Circle().fill(Color.rMint.opacity(0.18))
+                    Image(systemName: "person.2.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.rMint)
+                }
+                .frame(width: 26, height: 26)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Text(event.title)
+                            .font(RFont.body(14))
+                            .foregroundColor(RColor.text(scheme))
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        if isNew {
+                            Circle().fill(Color.rOrange).frame(width: 6, height: 6)
+                        }
+                    }
+                    if let meta = displayMeta {
+                        Text(meta)
+                            .font(RFont.mono(10))
+                            .foregroundColor(RColor.muted(scheme))
+                    }
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10))
+                    .foregroundColor(RColor.muted(scheme).opacity(0.4))
+            }
+            .memoryCardLabel()
+        }
+        .buttonStyle(.plain)
+        .modifier(MemoryCardChrome(scheme: scheme, borderColor: Color.rMint.opacity(0.4)))
     }
 }
 
@@ -714,6 +850,7 @@ struct NoteEditorView: View {
                             guard let y = Int(yearText), let m = month, let d = day else { return nil }
                             return String(format: "%04d-%02d-%02d", y, m, d)
                         }(),
+                        notePlace: place,
                         collectiveEventId: $collectiveEventId
                     )
                     .environmentObject(supabase)
@@ -884,7 +1021,7 @@ private struct DatePickerPopover: View {
 
 // MARK: - PlacePickerPopover
 
-private struct PlacePickerPopover: View {
+struct PlacePickerPopover: View {
     @Binding var place: String?
     let onChange: () -> Void
     @Environment(\.colorScheme) var scheme
@@ -974,6 +1111,7 @@ struct NoteInvitePopover: View {
     let noteId: UUID
     let noteContent: String
     let noteDateStr: String?
+    let notePlace: String?
     @Binding var collectiveEventId: UUID?
     @Environment(\.dismiss) var dismiss
 
@@ -1147,6 +1285,7 @@ struct NoteInvitePopover: View {
                 noteContent: noteContent,
                 title: eventTitle.trimmingCharacters(in: .whitespaces),
                 noteDateStr: noteDateStr,
+                notePlace: notePlace,
                 addUserId: profile.id,
                 existingEventId: collectiveEventId
             )

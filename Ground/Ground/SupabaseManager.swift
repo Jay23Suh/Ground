@@ -39,6 +39,8 @@ class SupabaseManager: ObservableObject {
     @Published var user: User?
     @Published var sessionRestored = false
     @Published var collectiveBadge: Int = 0
+    @Published var collectiveSeenAt: [UUID: Date] = SupabaseManager.loadCollectiveSeenAt()
+    @Published var collectiveLocalPlaces: [UUID: String] = SupabaseManager.loadCollectiveLocalPlaces()
 
     var userName: String? {
         (user?.userMetadata["name"]?.value as? String)
@@ -257,7 +259,7 @@ class SupabaseManager: ObservableObject {
     }
 
     func shareNote(noteId: UUID, noteContent: String, title: String,
-                   noteDateStr: String?, addUserId: UUID, existingEventId: UUID?) async throws -> UUID {
+                   noteDateStr: String?, notePlace: String?, addUserId: UUID, existingEventId: UUID?) async throws -> UUID {
         guard let uid = user?.id else { throw SupabaseManagerError.notSignedIn }
         let now = SupabaseManager.isoFormatter.string(from: Date())
         struct MemberInsert: Encodable { let event_id: String; let user_id: String; let invited_by: String }
@@ -273,8 +275,11 @@ class SupabaseManager: ObservableObject {
             }
             try await client.from("collective_events")
                 .insert(EventInsert(id: eventId.uuidString, title: title,
-                                    event_date: noteDateStr, created_by: uid.uuidString, created_at: now))
+                                    event_date: noteDateStr,
+                                    created_by: uid.uuidString, created_at: now))
                 .execute()
+            // Place is intentionally local-only (not synced) — see setCollectivePlace.
+            setCollectivePlace(eventId, place: notePlace)
 
             try await client.from("collective_members")
                 .insert(MemberInsert(event_id: eventId.uuidString, user_id: uid.uuidString, invited_by: uid.uuidString))
@@ -505,31 +510,6 @@ class SupabaseManager: ObservableObject {
 
     // MARK: - Collective Memories
 
-    func createCollectiveEvent(title: String, date: Date?, friendIds: [UUID]) async throws -> CollectiveEvent {
-        guard let uid = user?.id else { throw SupabaseManagerError.notSignedIn }
-        let id = UUID()
-        let now = SupabaseManager.isoFormatter.string(from: Date())
-        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"
-        let dateStr = date.map { df.string(from: $0) }
-
-        struct EventInsert: Encodable {
-            let id: String; let title: String; let event_date: String?
-            let created_by: String; let created_at: String
-        }
-        try await client.from("collective_events")
-            .insert(EventInsert(id: id.uuidString, title: title, event_date: dateStr,
-                                created_by: uid.uuidString, created_at: now))
-            .execute()
-
-        struct MemberInsert: Encodable { let event_id: String; let user_id: String; let invited_by: String }
-        let members = ([uid] + friendIds).map {
-            MemberInsert(event_id: id.uuidString, user_id: $0.uuidString, invited_by: uid.uuidString)
-        }
-        try await client.from("collective_members").insert(members).execute()
-
-        return CollectiveEvent(id: id, title: title, event_date: dateStr, created_by: uid, created_at: now)
-    }
-
     func fetchCollectiveEvents() async throws -> [CollectiveEvent] {
         guard let uid = user?.id else { return [] }
         struct MemberRow: Codable { let event_id: UUID }
@@ -616,6 +596,59 @@ class SupabaseManager: ObservableObject {
         collectiveBadge += newCount
     }
 
+    private static let collectiveSeenAtKey = "ground.collectiveSeenAt"
+
+    private static func loadCollectiveSeenAt() -> [UUID: Date] {
+        let raw = UserDefaults.standard.dictionary(forKey: collectiveSeenAtKey) as? [String: Double] ?? [:]
+        return raw.reduce(into: [:]) { result, pair in
+            if let id = UUID(uuidString: pair.key) {
+                result[id] = Date(timeIntervalSince1970: pair.value)
+            }
+        }
+    }
+
+    func markCollectiveSeen(_ id: UUID) {
+        let now = Date()
+        collectiveSeenAt[id] = now
+        var raw = UserDefaults.standard.dictionary(forKey: Self.collectiveSeenAtKey) as? [String: Double] ?? [:]
+        raw[id.uuidString] = now.timeIntervalSince1970
+        UserDefaults.standard.set(raw, forKey: Self.collectiveSeenAtKey)
+    }
+
+    private static let collectiveLocalPlacesKey = "ground.collectiveLocalPlaces"
+
+    private static func loadCollectiveLocalPlaces() -> [UUID: String] {
+        let raw = UserDefaults.standard.dictionary(forKey: collectiveLocalPlacesKey) as? [String: String] ?? [:]
+        return raw.reduce(into: [:]) { result, pair in
+            if let id = UUID(uuidString: pair.key) { result[id] = pair.value }
+        }
+    }
+
+    // Place for a shared memory is local-only and never synced to Supabase: each
+    // member can tag the same shared memory with their own place, purely to drive
+    // their own place-pill filter, without disclosing it to other members.
+    func setCollectivePlace(_ id: UUID, place: String?) {
+        var raw = UserDefaults.standard.dictionary(forKey: Self.collectiveLocalPlacesKey) as? [String: String] ?? [:]
+        if let place, !place.isEmpty {
+            collectiveLocalPlaces[id] = place
+            raw[id.uuidString] = place
+        } else {
+            collectiveLocalPlaces.removeValue(forKey: id)
+            raw.removeValue(forKey: id.uuidString)
+        }
+        UserDefaults.standard.set(raw, forKey: Self.collectiveLocalPlacesKey)
+    }
+
+    func fetchCollectiveActivity(events: [CollectiveEvent]) async -> [UUID: Date] {
+        var result: [UUID: Date] = [:]
+        for event in events {
+            let perspectives = (try? await fetchCollectivePerspectives(eventId: event.id)) ?? []
+            let latestPerspective = perspectives.compactMap { parseISO($0.updated_at) }.max()
+            result[event.id] = max(latestPerspective ?? .distantPast, parseISO(event.created_at))
+        }
+        return result
+    }
+
     private static let isoParserFull: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -627,7 +660,7 @@ class SupabaseManager: ObservableObject {
         return f
     }()
 
-    private func parseISO(_ string: String) -> Date {
+    func parseISO(_ string: String) -> Date {
         if let d = SupabaseManager.isoParserFull.date(from: string) { return d }
         return SupabaseManager.isoParserBasic.date(from: string) ?? Date.distantPast
     }
