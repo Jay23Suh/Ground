@@ -2,9 +2,11 @@ import SwiftUI
 
 struct HistoryView: View {
     let entries: [Entry]
+    @Binding var scrollTarget: UUID?
     @Environment(\.colorScheme) var scheme
     @State private var selectedCategory: String? = nil
     @State private var searchText = ""
+    @State private var highlightedID: UUID? = nil
 
     private var categories: [String] {
         let all = entries.compactMap { $0.category }
@@ -67,14 +69,33 @@ struct HistoryView: View {
                 .frame(maxWidth: .infinity)
                 Spacer()
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(filtered) { entry in
-                            EntryCard(entry: entry)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(filtered) { entry in
+                                EntryCard(entry: entry, isHighlighted: entry.id == highlightedID)
+                                    .id(entry.id)
+                            }
                         }
+                        .padding(32)
                     }
-                    .padding(32)
+                    .onAppear { jumpToTarget(using: proxy) }
+                    .onChange(of: scrollTarget) { _, _ in jumpToTarget(using: proxy) }
                 }
+            }
+        }
+    }
+
+    private func jumpToTarget(using proxy: ScrollViewProxy) {
+        guard let target = scrollTarget else { return }
+        selectedCategory = nil
+        searchText = ""
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            withAnimation(.easeInOut(duration: 0.4)) { proxy.scrollTo(target, anchor: .center) }
+            highlightedID = target
+            scrollTarget = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                withAnimation(.easeOut(duration: 0.6)) { highlightedID = nil }
             }
         }
     }
@@ -82,6 +103,7 @@ struct HistoryView: View {
 
 struct EntryCard: View {
     let entry: Entry
+    var isHighlighted: Bool = false
     @Environment(\.colorScheme) var scheme
 
     var body: some View {
@@ -123,7 +145,11 @@ struct EntryCard: View {
         .background(
             RoundedRectangle(cornerRadius: 14)
                 .fill(RColor.card(scheme))
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(RColor.border(scheme), lineWidth: 1))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(isHighlighted ? Color.rOrange : RColor.border(scheme), lineWidth: isHighlighted ? 2 : 1)
+                )
+                .shadow(color: Color.rOrange.opacity(isHighlighted ? 0.35 : 0), radius: 12)
         )
     }
 }

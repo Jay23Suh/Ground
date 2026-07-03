@@ -2,10 +2,34 @@ import SwiftUI
 
 struct StatsView: View {
     let entries: [Entry]
+    var onSelectEntry: (UUID) -> Void = { _ in }
+    @EnvironmentObject var supabase: SupabaseManager
     @Environment(\.colorScheme) var scheme
     @State private var sentimentScores: [UUID: Double] = [:]
+    @State private var notes: [Note] = []
 
     private var stats: GroundStats { GroundStats(entries: entries, sentimentScores: sentimentScores) }
+
+    private var notesWordCount: Int { notes.reduce(0) { $0 + $1.wordCount } }
+    private var notesAvgWords: Int { notes.isEmpty ? 0 : notesWordCount / notes.count }
+
+    private var topLongestEntries: [RankedEntrySummary] {
+        entries.filter { !$0.skipped }
+            .sorted { $0.wordCount > $1.wordCount }
+            .prefix(3)
+            .compactMap { e in e.snippet.map { RankedEntrySummary(id: e.id, snippet: $0, metric: "\(e.wordCount) words") } }
+    }
+
+    private var topEmotionalEntries: [RankedEntrySummary] {
+        entries.filter { !$0.skipped }
+            .compactMap { e -> (Entry, Double)? in
+                guard let score = sentimentScores[e.id] else { return nil }
+                return (e, score)
+            }
+            .sorted { $0.1 > $1.1 }
+            .prefix(3)
+            .compactMap { e, _ in e.snippet.map { RankedEntrySummary(id: e.id, snippet: $0, metric: e.formattedDate) } }
+    }
 
     var body: some View {
         ScrollView {
@@ -30,6 +54,10 @@ struct StatsView: View {
                             .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.rOrange.opacity(0.25), lineWidth: 1))
                     )
                 }
+
+                Text("entries")
+                    .font(RFont.body(13).weight(.semibold))
+                    .foregroundColor(RColor.text(scheme))
 
                 // Big stat cards row
                 HStack(spacing: 12) {
@@ -60,6 +88,14 @@ struct StatsView: View {
                     CategoryBreakdownView(breakdown: stats.categoryBreakdown)
                 }
 
+                // Highlights
+                if topLongestEntries.count >= 2 {
+                    TopEntriesListCard(title: "top 3 longest entries", accent: .rOrange, items: topLongestEntries, onSelect: onSelectEntry)
+                }
+                if topEmotionalEntries.count >= 2 {
+                    TopEntriesListCard(title: "top 3 most emotional entries", accent: .rPink, items: topEmotionalEntries, onSelect: onSelectEntry)
+                }
+
                 // Mood
                 if stats.baselineSampleCount >= 1 {
                     MoodTimelineView(stats: stats)
@@ -70,11 +106,29 @@ struct StatsView: View {
 
                 // Chart
                 EntryChartView(entries: entries)
+
+                // Memories
+                if !notes.isEmpty {
+                    Divider().opacity(0.4)
+
+                    Text("memories")
+                        .font(RFont.body(13).weight(.semibold))
+                        .foregroundColor(RColor.text(scheme))
+
+                    HStack(spacing: 12) {
+                        StatCard(label: "notes",          value: "\(notes.count)")
+                        StatCard(label: "words written",  value: "\(notesWordCount)")
+                        StatCard(label: "avg words/note", value: "\(notesAvgWords)")
+                    }
+                }
             }
             .padding(32)
         }
         .task(id: entries.map(\.id).hashValue) {
             sentimentScores = await Entry.computeSentiment(for: entries)
+        }
+        .task {
+            notes = (try? await supabase.fetchNotes()) ?? []
         }
     }
 }
@@ -607,6 +661,69 @@ struct CategoryBreakdownView: View {
                             .font(RFont.mono(9))
                             .foregroundColor(RColor.muted(scheme))
                             .frame(width: 30, alignment: .trailing)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(RColor.card(scheme))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(RColor.border(scheme), lineWidth: 1))
+        )
+    }
+}
+
+// MARK: - Top Entries
+
+struct RankedEntrySummary: Identifiable {
+    let id: UUID   // the underlying Entry's id, so a row can link back to it in History
+    let snippet: String
+    let metric: String
+}
+
+struct TopEntriesListCard: View {
+    @Environment(\.colorScheme) var scheme
+    let title: String
+    let accent: Color
+    let items: [RankedEntrySummary]
+    var onSelect: (UUID) -> Void = { _ in }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(RFont.body(13).weight(.semibold))
+                .foregroundColor(RColor.text(scheme))
+
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+                    Button { onSelect(item.id) } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Text("\(i + 1)")
+                                .font(RFont.mono(11))
+                                .foregroundColor(accent)
+                                .frame(width: 14, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(item.snippet)
+                                    .font(RFont.body(13).italic())
+                                    .foregroundColor(RColor.text(scheme))
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .multilineTextAlignment(.leading)
+                                Text(item.metric)
+                                    .font(RFont.mono(9))
+                                    .foregroundColor(RColor.muted(scheme))
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(RColor.muted(scheme).opacity(0.5))
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if i < items.count - 1 {
+                        Divider().opacity(0.3)
                     }
                 }
             }

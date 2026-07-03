@@ -13,6 +13,7 @@ struct MainWindowView: View {
     @State private var entries: [Entry] = []
     @State private var loading = true
     @State private var showNotificationPrompt = false
+    @State private var historyScrollTarget: UUID? = nil
 
     private var answeredEntries: [Entry] { entries.filter { !$0.skipped } }
 
@@ -95,12 +96,16 @@ struct MainWindowView: View {
                         HomeView(entries: entries)
                             .environmentObject(supabase)
                     case .history:
-                        HistoryView(entries: entries)
+                        HistoryView(entries: entries, scrollTarget: $historyScrollTarget)
                     case .notes:
                         NotesView()
                             .environmentObject(supabase)
                     case .stats:
-                        StatsView(entries: entries)
+                        StatsView(entries: entries, onSelectEntry: { id in
+                            historyScrollTarget = id
+                            tab = .history
+                        })
+                            .environmentObject(supabase)
                     case .abstract:
                         if isAbstractUnlocked {
                             AbstractView(entries: answeredEntries, onClose: { tab = .home })

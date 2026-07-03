@@ -4,12 +4,18 @@ import SwiftUI
 
 enum AbstractSlideType {
     case title
-    case count(bg: Color, accent: Color, value: Int, label: String, context: String)
+    case count(bg: Color, accent: Color, value: Int, label: String, context: String, comparison: AbstractCountComparison?)
     case text(bg: Color, accent: Color, headline: String, subtext: String)
     case quote(bg: Color, accent: Color, quote: String, context: String)
     case wordCloud(bg: Color, words: [(word: String, rank: Int)])
     case mood(score: Double, trend: String?)
     case closing(message: String)
+}
+
+struct AbstractCountComparison: Equatable {
+    enum Direction { case up, down, flat }
+    let pct: Int
+    let direction: Direction
 }
 
 struct AbstractSlide: Identifiable {
@@ -114,12 +120,28 @@ struct AbstractView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: entries.map(\.id).hashValue) {
             let scores = await Entry.computeSentiment(for: entries)
-            let stats = GroundStats(entries: entries, sentimentScores: scores)
-            let topWords = await Task.detached(priority: .userInitiated) { [entries] in
-                AbstractView.computeTopWords(entries: entries)
-            }.value
             sentimentScores = scores
-            slides = buildSlides(stats: stats, sentimentScores: scores, topWords: topWords)
+
+            // `entries` is already answered-only (see MainWindowView call site) — inGroundWeek
+            // relies on that, no extra skip filtering needed here.
+            let thisWeek = entries.inGroundWeek(offsetWeeks: 0)
+            let lastWeek = entries.inGroundWeek(offsetWeeks: -1)
+            guard !thisWeek.isEmpty else {
+                slides = emptyWeekSlides()
+                current = 0
+                return
+            }
+
+            let weekStats = GroundStats(entries: thisWeek, sentimentScores: scores)
+            // Current streak, not longest — it's a "continued" stat that shouldn't reset every abstract,
+            // and can run longer than 7 days, so it's computed off all-time entries, not thisWeek.
+            let currentStreak = GroundStats(entries: entries, sentimentScores: scores).currentStreak
+            let topWords = await Task.detached(priority: .userInitiated) { [thisWeek] in
+                AbstractView.computeTopWords(entries: thisWeek)
+            }.value
+            slides = buildSlides(thisWeek: thisWeek, lastWeek: lastWeek, weekStats: weekStats,
+                                  currentStreak: currentStreak, sentimentScores: scores, topWords: topWords)
+            current = 0
         }
         .onKeyPress(.space)      { advance(); return .handled }
         .onKeyPress(.rightArrow) { advance(); return .handled }
@@ -151,34 +173,39 @@ struct AbstractView: View {
         "community":  "you were reaching out.",
     ]
 
-    private func buildSlides(stats: GroundStats, sentimentScores: [UUID: Double] = [:], topWords: [String] = []) -> [AbstractSlide] {
+    private func buildSlides(thisWeek: [Entry], lastWeek: [Entry], weekStats: GroundStats,
+                              currentStreak: Int, sentimentScores: [UUID: Double], topWords: [String]) -> [AbstractSlide] {
         var s: [AbstractSlide] = [.init(type: .title)]
 
-        // 1. Entries
+        // 1. Entries this week, compared to last week
+        let lastWeekWords = lastWeek.reduce(0) { $0 + $1.wordCount }
         s.append(.init(type: .count(
             bg: Color(hex: "#271610"), accent: Color(hex: "#ff8c42"),
-            value: stats.totalEntries, label: "entries",
-            context: stats.totalEntries == 1 ? "you showed up." : "you kept showing up."
+            value: weekStats.totalEntries, label: "entries",
+            context: weekStats.totalEntries == 1 ? "you showed up." : "you kept showing up.",
+            comparison: growthComparison(current: weekStats.totalEntries, previous: lastWeek.count)
         )))
 
-        // 2. Words
+        // 2. Words this week, compared to last week
         s.append(.init(type: .count(
             bg: Color(hex: "#0f2418"), accent: Color(hex: "#5edb97"),
-            value: stats.totalWords, label: "words written",
-            context: "every one of them mattered."
+            value: weekStats.totalWords, label: "words written",
+            context: "every one of them mattered.",
+            comparison: growthComparison(current: weekStats.totalWords, previous: lastWeekWords)
         )))
 
-        // 3. Streak
-        if stats.longestStreak > 1 {
+        // 3. Streak — current, not week-scoped (doesn't reset every abstract, can run past 7 days)
+        if currentStreak > 1 {
             s.append(.init(type: .count(
                 bg: Color(hex: "#22190a"), accent: Color(hex: "#ffc840"),
-                value: stats.longestStreak, label: "day streak",
-                context: "consistency is a form of care."
+                value: currentStreak, label: "day streak",
+                context: "consistency is a form of care.",
+                comparison: nil
             )))
         }
 
-        // 4. Top category
-        if let cat = stats.topCategory {
+        // 4. Top category this week
+        if let cat = weekStats.topCategory {
             s.append(.init(type: .text(
                 bg: Color(hex: "#171322"), accent: Color(hex: "#C39BD3"),
                 headline: categoryLabels[cat] ?? cat,
@@ -186,9 +213,9 @@ struct AbstractView: View {
             )))
         }
 
-        // 5. Most active day/time
-        if let day = stats.mostActiveDay {
-            let sub = stats.mostActiveHour.map { "usually around \(hourLabel($0))" }
+        // 5. Most active day/time this week
+        if let day = weekStats.mostActiveDay {
+            let sub = weekStats.mostActiveHour.map { "usually around \(hourLabel($0))" }
                 ?? "whenever the moment felt right."
             s.append(.init(type: .text(
                 bg: Color(hex: "#101f22"), accent: Color(hex: "#60d4e8"),
@@ -197,7 +224,7 @@ struct AbstractView: View {
             )))
         }
 
-        // 6. Word cloud
+        // 6. Word cloud this week
         if topWords.count >= 3 {
             s.append(.init(type: .wordCloud(
                 bg: Color(hex: "#121218"),
@@ -205,11 +232,11 @@ struct AbstractView: View {
             )))
         }
 
-        // 7. Pull quote — longest entry
-        let answered = entries.filter { !$0.skipped }
+        // 7. Pull quote — longest entry this week
+        let answered = thisWeek.filter { !$0.skipped }
         if let longest = answered.max(by: { $0.wordCount < $1.wordCount }),
            longest.wordCount > 10,
-           let quote = extractFirstSentence(longest.answer ?? "") {
+           let quote = longest.snippet {
             s.append(.init(type: .quote(
                 bg: Color(hex: "#0e161c"),
                 accent: Color(hex: "#60d4e8"),
@@ -218,7 +245,7 @@ struct AbstractView: View {
             )))
         }
 
-        // 8. Pull quote — highest sentiment entry (if different from longest)
+        // 8. Pull quote — highest sentiment entry this week (if different from longest)
         let longestId = answered.max(by: { $0.wordCount < $1.wordCount })?.id
         if let highestEntry = answered
             .compactMap({ e -> (Entry, Double)? in
@@ -227,7 +254,7 @@ struct AbstractView: View {
             })
             .max(by: { $0.1 < $1.1 })?.0,
            highestEntry.id != longestId,
-           let quote = extractFirstSentence(highestEntry.answer ?? "") {
+           let quote = highestEntry.snippet {
             s.append(.init(type: .quote(
                 bg: Color(hex: "#0e1411"),
                 accent: Color(hex: "#5edb97"),
@@ -236,37 +263,41 @@ struct AbstractView: View {
             )))
         }
 
-        // 9. Mood
-        if let avg = stats.avgMoodDelta {
-            s.append(.init(type: .mood(score: avg, trend: stats.moodTrendDirection)))
+        // 9. Mood this week
+        if let avg = weekStats.avgMoodDelta {
+            s.append(.init(type: .mood(score: avg, trend: weekStats.moodTrendDirection)))
         }
 
-        // 10. Skips — near the end, gentle
-        if stats.totalSkips > 0 {
-            let msg = stats.skipRate >= 0.5
+        // 10. Skips this week — near the end, gentle
+        if weekStats.totalSkips > 0 {
+            let msg = weekStats.skipRate >= 0.5
                 ? "it's okay — but make some time for yourself to ground."
                 : "you showed up most of the time. that matters."
             s.append(.init(type: .text(
                 bg: Color(hex: "#1a1222"), accent: Color(hex: "#FFA6C9"),
-                headline: "\(stats.totalSkips) skipped",
+                headline: "\(weekStats.totalSkips) skipped",
                 subtext: msg
             )))
         }
 
         // 11. Closing
-        s.append(.init(type: .closing(message: closingMessage(stats: stats))))
+        s.append(.init(type: .closing(message: closingMessage(stats: weekStats, entries: thisWeek, currentStreak: currentStreak))))
         return s
     }
 
-    private func extractFirstSentence(_ text: String) -> String? {
-        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard cleaned.count > 15 else { return nil }
-        let enders = CharacterSet(charactersIn: ".!?")
-        if let range = cleaned.rangeOfCharacter(from: enders), range.lowerBound > cleaned.startIndex {
-            let sentence = String(cleaned[..<range.upperBound])
-            if sentence.count > 15 { return sentence }
-        }
-        return cleaned.count > 120 ? String(cleaned.prefix(120)) + "…" : cleaned
+    private func growthComparison(current: Int, previous: Int) -> AbstractCountComparison? {
+        guard previous > 0 else { return nil }
+        if current == previous { return AbstractCountComparison(pct: 0, direction: .flat) }
+        let pct = Int((Double(abs(current - previous)) / Double(previous) * 100).rounded())
+        return AbstractCountComparison(pct: pct, direction: current > previous ? .up : .down)
+    }
+
+    private func emptyWeekSlides() -> [AbstractSlide] {
+        [.init(type: .text(
+            bg: Color(hex: "#1c1610"), accent: Color(hex: "#f0c060"),
+            headline: "nothing written\nthis week yet",
+            subtext: "come back once you've journaled — your week starts fresh each Sunday."
+        ))]
     }
 
     private static func computeTopWords(entries: [Entry]) -> [String] {
@@ -366,7 +397,7 @@ struct AbstractView: View {
             .map(\.key)
     }
 
-    private func closingMessage(stats: GroundStats) -> String {
+    private func closingMessage(stats: GroundStats, entries: [Entry], currentStreak: Int) -> String {
         // Personal data-driven closing — use real numbers
         if let cat = stats.topCategory {
             let catWords = entries
@@ -377,8 +408,8 @@ struct AbstractView: View {
                 return "you wrote \(catWords) words\nabout \(label) ✦"
             }
         }
-        if stats.longestStreak >= 7 {
-            return "you showed up\n\(stats.longestStreak) days in a row ✦"
+        if currentStreak >= 7 {
+            return "you showed up\n\(currentStreak) days in a row ✦"
         }
         if stats.totalEntries >= 10 {
             return "\(stats.totalEntries) entries.\nthat's not nothing ✦"
@@ -400,11 +431,11 @@ struct AbstractSlideView: View {
             switch slide.type {
             case .title:
                 TitleSlideView(visible: visible, appeared: appeared)
-            case let .count(bg, accent, value, label, context):
+            case let .count(bg, accent, value, label, context, comparison):
                 CountSlideView(visible: visible, appeared: appeared,
                                bg: bg, accent: accent,
                                value: value, label: label, context: context,
-                               countVal: countVal)
+                               countVal: countVal, comparison: comparison)
             case let .text(bg, accent, headline, subtext):
                 TextSlideView(visible: visible, appeared: appeared,
                               bg: bg, accent: accent,
@@ -432,7 +463,7 @@ struct AbstractSlideView: View {
                 countVal = 0
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     appeared = true
-                    if case let .count(_, _, value, _, _) = slide.type {
+                    if case let .count(_, _, value, _, _, _) = slide.type {
                         withAnimation(.easeOut(duration: 1.4).delay(0.2)) {
                             countVal = Double(value)
                         }
@@ -443,7 +474,7 @@ struct AbstractSlideView: View {
         .onAppear {
             if visible {
                 appeared = true
-                if case let .count(_, _, value, _, _) = slide.type {
+                if case let .count(_, _, value, _, _, _) = slide.type {
                     withAnimation(.easeOut(duration: 1.4).delay(0.2)) {
                         countVal = Double(value)
                     }
@@ -461,7 +492,7 @@ struct TitleSlideView: View {
     var body: some View {
         ZStack { Color(hex: "#1c1610").ignoresSafeArea()
             VStack(spacing: 0) {
-                Text("your journey in journaling")
+                Text("your week in journaling")
                     .font(.system(size: 11, weight: .regular, design: .monospaced))
                     .tracking(5).textCase(.uppercase)
                     .foregroundColor(Color(hex: "#f0c060").opacity(0.4))
@@ -496,6 +527,7 @@ struct CountSlideView: View {
     let label: String
     let context: String
     let countVal: Double
+    let comparison: AbstractCountComparison?
 
     var body: some View {
         ZStack { bg.ignoresSafeArea()
@@ -519,6 +551,26 @@ struct CountSlideView: View {
                     .padding(.horizontal, 40)
                     .opacity(appeared ? 1 : 0)
                     .animation(.easeOut(duration: 0.5).delay(0.4), value: appeared)
+                if let comparison {
+                    HStack(spacing: 4) {
+                        if comparison.direction != .flat {
+                            Image(systemName: comparison.direction == .up ? "arrow.up" : "arrow.down")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                        Text(comparison.direction == .flat ? "same as last week" : "\(comparison.pct)% vs last week")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    }
+                    .foregroundColor(
+                        comparison.direction == .up   ? Color(hex: "#5edb97")
+                      : comparison.direction == .down ? Color.white.opacity(0.4)
+                      : Color.white.opacity(0.3)
+                    )
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(Capsule().fill(Color.white.opacity(0.07)))
+                    .padding(.top, 14)
+                    .opacity(appeared ? 1 : 0)
+                    .animation(.easeOut(duration: 0.5).delay(0.55), value: appeared)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
