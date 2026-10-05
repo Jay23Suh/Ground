@@ -217,12 +217,19 @@ class SupabaseManager: ObservableObject {
 
     // MARK: - Notes
 
+    // notes.user_id and notes.id are text columns. Swift's uuidString is uppercase
+    // while Supabase (and the web app) use lowercase, so write lowercase and match
+    // either casing when reading or targeting existing rows.
+    private func idVariants(_ id: UUID) -> [String] {
+        [id.uuidString.lowercased(), id.uuidString]
+    }
+
     func fetchNotes() async throws -> [Note] {
         guard let uid = user?.id else { return [] }
         return try await client
             .from("notes")
             .select()
-            .eq("user_id", value: uid.uuidString)
+            .in("user_id", values: idVariants(uid))
             .order("created_at", ascending: false)
             .execute()
             .value
@@ -238,10 +245,10 @@ class SupabaseManager: ObservableObject {
         }
         try await client
             .from("notes")
-            .insert(InsertNote(id: id.uuidString, user_id: uid.uuidString, content: "",
+            .insert(InsertNote(id: id.uuidString.lowercased(), user_id: uid.uuidString.lowercased(), content: "",
                                created_at: now, updated_at: now))
             .execute()
-        return Note(id: id, user_id: uid.uuidString, content: "",
+        return Note(id: id, user_id: uid.uuidString.lowercased(), content: "",
                     year: nil, month: nil, day: nil, created_at: now, updated_at: now)
     }
 
@@ -256,7 +263,7 @@ class SupabaseManager: ObservableObject {
                                day: note.day, place: note.place,
                                collective_event_id: note.collective_event_id?.uuidString,
                                updated_at: SupabaseManager.isoFormatter.string(from: Date())))
-            .eq("id", value: note.id.uuidString)
+            .in("id", values: idVariants(note.id))
             .execute()
     }
 
@@ -289,7 +296,7 @@ class SupabaseManager: ObservableObject {
 
             try await client.from("notes")
                 .update(["collective_event_id": eventId.uuidString])
-                .eq("id", value: noteId.uuidString)
+                .in("id", values: idVariants(noteId))
                 .execute()
 
             struct PerspUpsert: Encodable {
@@ -319,6 +326,7 @@ class SupabaseManager: ObservableObject {
         struct PlacePatch: Encodable, Sendable { let place: String; let updated_at: String }
 
         let now = SupabaseManager.isoFormatter.string(from: Date())
+        let ownerIds = idVariants(uid)
         await Task.detached(priority: .utility) {
             let tagger = NLTagger(tagSchemes: [.nameType])
 
@@ -336,8 +344,8 @@ class SupabaseManager: ObservableObject {
                 try? await self.client
                     .from("notes")
                     .update(PlacePatch(place: place, updated_at: now))
-                    .eq("id", value: note.id.uuidString)
-                    .eq("user_id", value: uid.uuidString)
+                    .in("id", values: [note.id.uuidString.lowercased(), note.id.uuidString])
+                    .in("user_id", values: ownerIds)
                     .execute()
             }
         }.value
@@ -345,7 +353,7 @@ class SupabaseManager: ObservableObject {
     }
 
     func deleteNote(id: UUID) async throws {
-        try await client.from("notes").delete().eq("id", value: id.uuidString).execute()
+        try await client.from("notes").delete().in("id", values: idVariants(id)).execute()
     }
 
     // MARK: - Entries
